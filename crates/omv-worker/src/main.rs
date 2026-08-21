@@ -6,6 +6,7 @@
 
 mod encode;
 mod orthanc;
+mod sorting;
 
 use anyhow::{Context, Result};
 use omv_core::{
@@ -287,7 +288,8 @@ impl Worker {
 
     /// Builds the ordered (instance, frame) list for a series: multi-frame
     /// cine instances expand to their frames; single-frame stacks are ordered
-    /// by InstanceNumber.
+    /// geometrically by ImagePositionPatient projected onto the series
+    /// normal, with InstanceNumber as the fallback (design §4.1).
     async fn frame_list(&self, series: &Value) -> Result<Vec<(String, u32)>> {
         let ids: Vec<String> = series["Instances"]
             .as_array()
@@ -296,13 +298,10 @@ impl Worker {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
 
-        let mut instances = Vec::new();
+        let mut slices = Vec::new();
         for id in &ids {
             let meta = self.orthanc.get_json(&format!("/instances/{id}")).await?;
-            let number: i64 = meta["MainDicomTags"]["InstanceNumber"]
-                .as_str()
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(0);
+            let tags = &meta["MainDicomTags"];
             let frame_count = self
                 .orthanc
                 .get_json(&format!("/instances/{id}/frames"))
@@ -310,14 +309,41 @@ impl Worker {
                 .as_array()
                 .map(|a| a.len() as u32)
                 .unwrap_or(1);
-            instances.push((number, id.clone(), frame_count));
+            slices.push(sorting::SliceRef {
+                id: id.clone(),
+                instance_number: tags["InstanceNumber"]
+                    .as_str()
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(0),
+                position: tags["ImagePositionPatient"]
+                    .as_str()
+                    .and_then(sorting::parse_position),
+                frames: frame_count,
+            });
         }
-        instances.sort_by_key(|(n, _, _)| *n);
+
+        // Orientation is a series-level property; read it from one instance.
+        let orientation = match slices.first() {
+            Some(first) if slices.len() > 1 => self
+                .orthanc
+                .get_json(&format!("/instances/{}/simplified-tags", first.id))
+                .await
+                .ok()
+                .and_then(|t| {
+                    t["ImageOrientationPatient"]
+                        .as_str()
+                        .and_then(sorting::parse_orientation)
+                }),
+            _ => None,
+        };
+
+        let method = sorting::sort_slices(orientation, &mut slices);
+        info!(slices = slices.len(), method, "slice order determined");
 
         let mut frames = Vec::new();
-        for (_, id, count) in instances {
-            for f in 0..count.max(1) {
-                frames.push((id.clone(), f));
+        for s in slices {
+            for f in 0..s.frames.max(1) {
+                frames.push((s.id.clone(), f));
             }
         }
         Ok(frames)

@@ -80,7 +80,7 @@ def us_cine(frames=60, size=256) -> bytes:
     return dcm_bytes(ds)
 
 
-def ct_slice(z: int, n_slices: int, size=256) -> bytes:
+def ct_slice(z: int, n_slices: int, size=256, scramble=False) -> bytes:
     """One CT slice in HU: air background, water cylinder, bone ring, a lung-
     density pocket — so each window preset shows different anatomy."""
     series_uid = ct_slice.series_uid
@@ -88,7 +88,9 @@ def ct_slice(z: int, n_slices: int, size=256) -> bytes:
     ds = base_dataset("1.2.840.10008.5.1.4.1.1.2", sop_uid, series_uid, "CT")
     ds.SeriesDescription = "Synthetic CT stack"
     ds.SeriesNumber = 2
-    ds.InstanceNumber = z + 1
+    # --scramble reverses InstanceNumber relative to spatial order while
+    # ImagePositionPatient stays correct: geometric sorting must win.
+    ds.InstanceNumber = (n_slices - z) if scramble else (z + 1)
     ds.ImagePositionPatient = [0, 0, float(z) * 2.5]
     ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
     ds.SliceThickness = 2.5
@@ -147,12 +149,14 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--orthanc", default="http://localhost:8042")
     ap.add_argument("--slices", type=int, default=40)
+    ap.add_argument("--scramble", action="store_true",
+                    help="reverse CT InstanceNumbers vs spatial order")
     args = ap.parse_args()
 
     print(f"study UID: {STUDY_UID}")
     upload(args.orthanc, us_cine())
     print("uploaded: US cine (60 frames @ 20 fps)")
     for z in range(args.slices):
-        upload(args.orthanc, ct_slice(z, args.slices))
+        upload(args.orthanc, ct_slice(z, args.slices, scramble=args.scramble))
     print(f"uploaded: CT stack ({args.slices} slices)")
     print("waiting for Orthanc StableAge; conversion starts automatically.")
