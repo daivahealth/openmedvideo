@@ -48,8 +48,9 @@ Then:
    ExoPlayer — it's plain HLS with a short-lived, study-scoped token baked
    into the path.
 
-Note: the player currently loads hls.js from a CDN for non-Safari browsers;
-Phase 2 vendors it into the binary for offline hospital networks.
+The player is fully self-contained: hls.js (v1.6.15, Apache-2.0) is vendored
+into the API binary and served at `/player-assets/hls.min.js`, so it works on
+offline hospital networks with no CDN dependency.
 
 ## Phase 1 design shortcuts (deliberate)
 

@@ -61,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/studies/{study_uid}", get(get_study))
         .route("/stream/{token}/{*key}", get(stream_object))
         .route("/player/{token}/{study_uid}", get(player_page))
+        .route("/player-assets/hls.min.js", get(hls_js))
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -229,6 +230,19 @@ async fn player_page() -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-store"),
         ],
         include_str!("../assets/player.html"),
+    )
+}
+
+/// Vendored hls.js (v1.6.15, Apache-2.0 — see assets/vendor/hls.LICENSE),
+/// compiled into the binary so the player works on offline hospital networks
+/// with no CDN dependency.
+async fn hls_js() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
+        ],
+        include_str!("../assets/vendor/hls.min.js"),
     )
 }
 
