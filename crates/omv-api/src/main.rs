@@ -60,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/studies", get(list_studies))
         .route("/v1/studies/{study_uid}", get(get_study))
         .route("/stream/{token}/{*key}", get(stream_object))
+        .route("/player/{token}/{study_uid}", get(player_page))
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -212,7 +213,23 @@ async fn get_study(
             "playlist_url": format!("{stream_base}/{}", r.get::<String, _>("playlist")),
         })).collect::<Vec<_>>(),
         "token_expires_in_secs": st.cfg.token_ttl_secs,
+        // Drop-in playback for WebViews/iframes (design §5.3 tier 1): one
+        // URL, no SDK. The page reads everything else from manifest.json.
+        "player_url": format!("/player/{playback_token}/{study_uid}"),
     })))
+}
+
+/// The embeddable web player. Static HTML compiled into the binary; the
+/// token in the path is validated by the /stream endpoints the page calls,
+/// so an expired link degrades to a friendly in-page message.
+async fn player_page() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        include_str!("../assets/player.html"),
+    )
 }
 
 // -------------------------------------------------------------- streaming --

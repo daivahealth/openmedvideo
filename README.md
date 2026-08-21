@@ -39,9 +39,17 @@ Then:
         -H "X-Practitioner-Id: dr.demo" \
         http://localhost:8000/v1/studies/<StudyInstanceUID>
    ```
-4. Open any `playlist_url` from the response in Safari, VLC, AVPlayer, or
+4. Open the `player_url` from the study response in any browser — it's the
+   **embeddable web player** (design §5.3 tier 1): slice-aware scrub bar
+   (`21/40`), ±1 frame stepping (also ←/→ keys), window-preset tabs for CT
+   that preserve the playback position, series switcher, loop toggle. One
+   tokenized URL, made for WebViews/iframes in client apps.
+5. Or open any `playlist_url` directly in Safari, VLC, AVPlayer, or
    ExoPlayer — it's plain HLS with a short-lived, study-scoped token baked
    into the path.
+
+Note: the player currently loads hls.js from a CDN for non-Safari browsers;
+Phase 2 vendors it into the binary for offline hospital networks.
 
 ## Phase 1 design shortcuts (deliberate)
 
