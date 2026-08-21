@@ -25,6 +25,9 @@ pub struct Config {
     pub client_tokens: Vec<String>,
     /// API bind address.
     pub bind_addr: String,
+    /// Whether the export-MP4 download path is available at all in this
+    /// deployment (per-client control is the imaging.export scope).
+    pub export_enabled: bool,
 }
 
 fn var(name: &str) -> Result<String> {
@@ -54,6 +57,7 @@ impl Config {
                 .map(String::from)
                 .collect(),
             bind_addr: var_or("OMV_BIND_ADDR", "0.0.0.0:8080"),
+            export_enabled: var_or("OMV_EXPORT_ENABLED", "1") == "1",
         })
     }
 }

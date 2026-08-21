@@ -74,6 +74,7 @@ services:
       OMV_TOKEN_SECRET: dev-only-change-me-in-production
       OMV_CLIENT_TOKENS: dev-client-token
       OMV_SEED_DEV_CLIENT: "1"
+      OMV_EXPORT_ENABLED: "1"
       RUST_LOG: info
     depends_on: [postgres, redis, minio-init]
     restart: unless-stopped

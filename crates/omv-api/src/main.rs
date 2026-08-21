@@ -68,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/oauth/token", post(auth::token_endpoint))
         .route("/v1/studies", get(list_studies))
         .route("/v1/studies/{study_uid}", get(get_study))
+        .route("/v1/studies/{study_uid}/export", get(export_mp4))
         .route("/stream/{token}/{*key}", get(stream_object))
         .route("/player/{token}/{study_uid}", get(player_page))
         .route("/player-assets/hls.min.js", get(hls_js))
@@ -225,16 +226,24 @@ async fn get_study(
         "disclaimer": omv_core::models::DISCLAIMER,
         "poster_url": (status == StudyStatus::Ready.as_str())
             .then(|| format!("{stream_base}/poster.jpg")),
-        "renditions": renditions.iter().map(|r| json!({
-            "series_uid": r.get::<String, _>("series_uid"),
-            "series_description": r.get::<String, _>("series_description"),
-            "modality": r.get::<String, _>("modality"),
-            "preset": r.get::<String, _>("preset"),
-            "preset_label": r.get::<String, _>("preset_label"),
-            "frames": r.get::<i32, _>("frames"),
-            "fps": r.get::<f64, _>("fps"),
-            "playlist_url": format!("{stream_base}/{}", r.get::<String, _>("playlist")),
-        })).collect::<Vec<_>>(),
+        "renditions": renditions.iter().map(|r| {
+            let series: String = r.get("series_uid");
+            let preset: String = r.get("preset");
+            json!({
+                "series_uid": series,
+                "series_description": r.get::<String, _>("series_description"),
+                "modality": r.get::<String, _>("modality"),
+                "preset": preset,
+                "preset_label": r.get::<String, _>("preset_label"),
+                "frames": r.get::<i32, _>("frames"),
+                "fps": r.get::<f64, _>("fps"),
+                "playlist_url": format!("{stream_base}/{}", r.get::<String, _>("playlist")),
+                // Explicit user action, imaging.export scope, audited (§7.2).
+                "export_url": (st.cfg.export_enabled && id.has_scope("imaging.export"))
+                    .then(|| format!(
+                        "/v1/studies/{study_uid}/export?series_uid={series}&preset={preset}")),
+            })
+        }).collect::<Vec<_>>(),
         "token_expires_in_secs": st.cfg.token_ttl_secs,
         // Drop-in playback for WebViews/iframes (design §5.3 tier 1): one
         // URL, no SDK. The page reads everything else from manifest.json.
@@ -279,6 +288,63 @@ async fn omv_player_js() -> impl IntoResponse {
         ],
         include_str!("../assets/omv-player.js"),
     )
+}
+
+// ---------------------------------------------------------------- export --
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    series_uid: String,
+    preset: String,
+}
+
+/// Downloads a rendition as a single MP4 (design §7.2). Requires the
+/// imaging.export scope; every request — allowed or denied — is audited.
+async fn export_mp4(
+    State(st): State<AppState>,
+    Path(study_uid): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ExportQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let id = authenticate(&st.cfg, &headers)?;
+    let detail = format!("{}:{}", q.series_uid, q.preset);
+
+    if !st.cfg.export_enabled || !id.has_scope("imaging.export") {
+        sqlx::query(
+            "INSERT INTO audit_events (practitioner, client_app, study_uid, action, detail)
+             VALUES ($1,$2,$3,'denied',$4)",
+        )
+        .bind(&id.practitioner).bind(&id.client_id).bind(&study_uid)
+        .bind(format!("export {detail}"))
+        .execute(&st.db)
+        .await?;
+        return Err(ApiError::Unauthorized);
+    }
+
+    let key = format!("studies/{study_uid}/{}/{}/export.mp4", q.series_uid, q.preset);
+    if key.contains("..") {
+        return Err(ApiError::Unauthorized);
+    }
+    let body = st.store.get(&key).await.map_err(|_| ApiError::NotFound)?;
+
+    sqlx::query(
+        "INSERT INTO audit_events (practitioner, client_app, study_uid, action, detail)
+         VALUES ($1,$2,$3,'export',$4)",
+    )
+    .bind(&id.practitioner).bind(&id.client_id).bind(&study_uid).bind(&detail)
+    .execute(&st.db)
+    .await?;
+
+    let filename = format!("study-{}-{}.mp4", &study_uid[study_uid.len().saturating_sub(8)..], q.preset);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "video/mp4".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\"")),
+            (header::CACHE_CONTROL, "private, no-store".to_string()),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 // -------------------------------------------------------------- streaming --

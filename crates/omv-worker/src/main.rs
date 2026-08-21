@@ -252,6 +252,8 @@ impl Worker {
                 enc.write_frame(&png).await?;
             }
             enc.finish().await?;
+            // export.mp4 lands in the same dir and uploads with the segments.
+            encode::mux_export(dir.path()).await?;
 
             let prefix = format!("studies/{study_uid}/{series_uid}/{}", preset.key);
             self.upload_dir(dir.path(), &prefix).await?;

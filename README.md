@@ -94,8 +94,7 @@ one element:
   Phase 2 throughput optimization, not a correctness need.
 - **The API streams HLS objects itself** after validating the playback token;
   nginx in front caches them. Phase 2 moves segment serving to nginx directly.
-- **Single-rendition ladder** (CRF 18 "high" only). CR/DX stills and the
-  export-MP4 path are skipped.
+- **Single-rendition ladder** (CRF 18 "high" only). CR/DX stills are skipped.
 - **libx264 software encoding**; NVENC lands in Phase 2 on GPU hosts.
 
 What already matches the design: the OAuth2/OIDC integration contract
@@ -106,8 +105,13 @@ series normal, InstanceNumber fallback), all-intra encoding for CT/MRI stacks
 (frame-accurate scrubbing),
 native cine rates for US/XA from the DICOM tags, three hardcoded CT window
 presets (soft/lung/bone) as separate renditions, prefix-scoped HMAC playback
-tokens, per-view audit events, and provider-neutral storage (MinIO/S3/Azure/GCS
-via `object_store`).
+tokens, per-view audit events, provider-neutral storage (MinIO/S3/Azure/GCS
+via `object_store`), and the export-MP4 path: each rendition also produces a
+single `export.mp4` (lossless re-mux of the HLS; re-encoded smaller only if it
+exceeds the WhatsApp-safe ~14 MB), downloadable via each rendition's
+`export_url` — requires the `imaging.export` scope, is audited per download
+(denials too), and can be disabled deployment-wide with
+`OMV_EXPORT_ENABLED=0`.
 
 ## Development
 

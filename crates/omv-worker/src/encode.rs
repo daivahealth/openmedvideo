@@ -67,3 +67,55 @@ impl HlsEncoder {
         Ok(())
     }
 }
+
+/// The rare share/export case (design §7.2) must survive WhatsApp's ~16 MB
+/// re-compression window; stay comfortably under it.
+const EXPORT_SIZE_LIMIT: u64 = 14 * 1024 * 1024;
+
+/// Produces `export.mp4` in `out_dir` from the HLS output already there.
+///
+/// First pass is a lossless re-mux (`-c copy`) of the segments — instant and
+/// identical quality. If that lands over the size limit (long stacks, big
+/// matrices), it re-encodes with a normal GOP and higher CRF: an export is
+/// watched, not frame-stepped, so all-intra isn't needed there.
+pub async fn mux_export(out_dir: &Path) -> Result<std::path::PathBuf> {
+    let playlist = out_dir.join("index.m3u8");
+    let export = out_dir.join("export.mp4");
+
+    let run = |args: Vec<String>| async move {
+        let status = Command::new("ffmpeg")
+            .args(["-y", "-hide_banner", "-loglevel", "error"])
+            .args(args)
+            .status()
+            .await
+            .context("spawning ffmpeg for export")?;
+        if !status.success() {
+            bail!("ffmpeg export exited with {status}");
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    let p = playlist.to_str().context("playlist path")?.to_string();
+    let e = export.to_str().context("export path")?.to_string();
+    run(vec![
+        "-i".into(), p.clone(),
+        "-c".into(), "copy".into(),
+        "-movflags".into(), "+faststart".into(),
+        e.clone(),
+    ])
+    .await?;
+
+    if std::fs::metadata(&export)?.len() > EXPORT_SIZE_LIMIT {
+        run(vec![
+            "-i".into(), p,
+            "-c:v".into(), "libx264".into(),
+            "-preset".into(), "veryfast".into(),
+            "-crf".into(), "26".into(),
+            "-pix_fmt".into(), "yuv420p".into(),
+            "-movflags".into(), "+faststart".into(),
+            e,
+        ])
+        .await?;
+    }
+    Ok(export)
+}
