@@ -18,6 +18,8 @@ pub struct Config {
     pub token_secret: String,
     /// Playback token lifetime in seconds.
     pub token_ttl_secs: i64,
+    /// OAuth access-token lifetime in seconds.
+    pub access_token_ttl_secs: i64,
     /// Comma-separated static bearer tokens for client apps (Phase 1 auth;
     /// replaced by OAuth2/OIDC token exchange in Phase 2).
     pub client_tokens: Vec<String>,
@@ -44,6 +46,7 @@ impl Config {
             storage_url: var("OMV_STORAGE_URL")?,
             token_secret: var("OMV_TOKEN_SECRET")?,
             token_ttl_secs: var_or("OMV_TOKEN_TTL_SECS", "300").parse()?,
+            access_token_ttl_secs: var_or("OMV_ACCESS_TOKEN_TTL_SECS", "900").parse()?,
             client_tokens: var_or("OMV_CLIENT_TOKENS", "")
                 .split(',')
                 .map(str::trim)

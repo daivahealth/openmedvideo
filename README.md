@@ -32,13 +32,23 @@ Then:
    at http://localhost:8042, user/pass `omv`/`omv`).
 2. ~30 s after the last instance arrives (Orthanc `StableAge`), the study is
    converted automatically.
-3. **Browse the catalog** through nginx:
+3. **Authenticate and browse the catalog** through nginx. The real flow is
+   OAuth 2.0 token exchange (RFC 8693): the client app swaps its user's IdP
+   token for an OMV access token. The compose stack seeds a dev client
+   (`aadi-dev` / `aadi-dev-secret`) registered against a fake HS256 IdP, and
+   `scripts/idp_token.py` mints the IdP token a real identity provider would:
    ```bash
-   curl -H "Authorization: Bearer dev-client-token" http://localhost:8000/v1/studies
-   curl -H "Authorization: Bearer dev-client-token" \
-        -H "X-Practitioner-Id: dr.demo" \
+   IDP_TOKEN=$(python3 scripts/idp_token.py dr.asha)
+   ACCESS_TOKEN=$(curl -s -u aadi-dev:aadi-dev-secret http://localhost:8000/oauth/token \
+     -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+     -d subject_token=$IDP_TOKEN | jq -r .access_token)
+   curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8000/v1/studies
+   curl -H "Authorization: Bearer $ACCESS_TOKEN" \
         http://localhost:8000/v1/studies/<StudyInstanceUID>
    ```
+   Server-to-server integrations use `grant_type=client_credentials` instead.
+   (The static `Bearer dev-client-token` from `OMV_CLIENT_TOKENS` still works
+   as a deprecated dev fallback.)
 4. Open the `player_url` from the study response in any browser — it's the
    **embeddable web player** (design §5.3 tier 1): slice-aware scrub bar
    (`21/40`), ±1 frame stepping (also ←/→ keys), window-preset tabs for CT
@@ -84,15 +94,15 @@ one element:
   Phase 2 throughput optimization, not a correctness need.
 - **The API streams HLS objects itself** after validating the playback token;
   nginx in front caches them. Phase 2 moves segment serving to nginx directly.
-- **Static bearer tokens** (`OMV_CLIENT_TOKENS`) stand in for the OAuth2/OIDC
-  token exchange defined in the design's integration contract (§5.3).
 - **Sorting by InstanceNumber**; geometric sort by ImagePositionPatient is
   Phase 2. Single-rendition ladder (CRF 18 "high" only). CR/DX stills and the
   export-MP4 path are skipped.
 - **libx264 software encoding**; NVENC lands in Phase 2 on GPU hosts.
 
-What already matches the design: convert-on-arrival via the stable-study
-webhook, all-intra encoding for CT/MRI stacks (frame-accurate scrubbing),
+What already matches the design: the OAuth2/OIDC integration contract
+(client registry with per-app scopes and IdP, RFC 8693 token exchange,
+client_credentials, JWKS validation for RS256 IdPs), convert-on-arrival via
+the stable-study webhook, all-intra encoding for CT/MRI stacks (frame-accurate scrubbing),
 native cine rates for US/XA from the DICOM tags, three hardcoded CT window
 presets (soft/lung/bone) as separate renditions, prefix-scoped HMAC playback
 tokens, per-view audit events, and provider-neutral storage (MinIO/S3/Azure/GCS

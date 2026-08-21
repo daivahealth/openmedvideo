@@ -23,12 +23,15 @@ use sqlx::{PgPool, Row};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 
+mod auth;
+
 #[derive(Clone)]
-struct AppState {
-    cfg: Config,
-    db: PgPool,
-    redis: redis::Client,
-    store: storage::Storage,
+pub struct AppState {
+    pub cfg: Config,
+    pub db: PgPool,
+    pub redis: redis::Client,
+    pub store: storage::Storage,
+    pub jwks: auth::JwksCache,
 }
 
 #[tokio::main]
@@ -47,9 +50,14 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     sqlx::migrate!("./migrations").run(&db).await?;
 
+    if std::env::var("OMV_SEED_DEV_CLIENT").as_deref() == Ok("1") {
+        auth::seed_dev_client(&db).await?;
+    }
+
     let state = AppState {
         redis: redis::Client::open(cfg.redis_url.clone())?,
         store: storage::Storage::from_url(&cfg.storage_url)?,
+        jwks: auth::JwksCache::default(),
         db,
         cfg,
     };
@@ -57,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/internal/orthanc-event", post(orthanc_event))
+        .route("/oauth/token", post(auth::token_endpoint))
         .route("/v1/studies", get(list_studies))
         .route("/v1/studies/{study_uid}", get(get_study))
         .route("/stream/{token}/{*key}", get(stream_object))
@@ -107,35 +116,40 @@ async fn orthanc_event(
 
 // --------------------------------------------------------------- catalog --
 
-/// Phase 1 client auth: static bearer tokens from OMV_CLIENT_TOKENS.
-/// Returns the client label ("client-N") used in the audit trail.
-fn authorize(cfg: &Config, headers: &HeaderMap) -> Result<String, ApiError> {
+/// Authenticates a catalog request and returns the caller's identity.
+///
+/// Primary path: an OMV access token from POST /oauth/token (token exchange
+/// or client_credentials). Deprecated dev fallback: the static bearer tokens
+/// from OMV_CLIENT_TOKENS, with the practitioner asserted in a header.
+fn authenticate(cfg: &Config, headers: &HeaderMap) -> Result<auth::Identity, ApiError> {
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
-    match cfg.client_tokens.iter().position(|t| t == bearer) {
-        Some(i) => Ok(format!("client-{i}")),
-        None => Err(ApiError::Unauthorized),
-    }
-}
 
-fn practitioner(headers: &HeaderMap) -> String {
-    // Phase 1: the client app asserts the practitioner id in a header.
-    // Phase 2 replaces this with the identity inside the exchanged OIDC token.
-    headers
-        .get("x-practitioner-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string()
+    if let Some(i) = cfg.client_tokens.iter().position(|t| t == bearer) {
+        return Ok(auth::Identity {
+            practitioner: headers
+                .get("x-practitioner-id")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string(),
+            client_id: format!("static-client-{i}"),
+            scopes: vec!["imaging.read".into(), "imaging.export".into()],
+        });
+    }
+    auth::validate(&cfg.token_secret, bearer).map_err(|_| ApiError::Unauthorized)
 }
 
 async fn list_studies(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    authorize(&st.cfg, &headers)?;
+    let id = authenticate(&st.cfg, &headers)?;
+    if !id.has_scope("imaging.read") {
+        return Err(ApiError::Unauthorized);
+    }
     let rows = sqlx::query(
         "SELECT study_uid, description, modalities, status, created_at
          FROM studies ORDER BY created_at DESC LIMIT 200",
@@ -162,8 +176,10 @@ async fn get_study(
     Path(study_uid): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let client = authorize(&st.cfg, &headers)?;
-    let who = practitioner(&headers);
+    let id = authenticate(&st.cfg, &headers)?;
+    if !id.has_scope("imaging.read") {
+        return Err(ApiError::Unauthorized);
+    }
 
     let study = sqlx::query(
         "SELECT study_uid, description, modalities, status FROM studies WHERE study_uid = $1",
@@ -194,8 +210,8 @@ async fn get_study(
     sqlx::query(
         "INSERT INTO audit_events (practitioner, client_app, study_uid, action) VALUES ($1,$2,$3,'view')",
     )
-    .bind(&who)
-    .bind(&client)
+    .bind(&id.practitioner)
+    .bind(&id.client_id)
     .bind(&study_uid)
     .execute(&st.db)
     .await?;
