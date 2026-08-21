@@ -94,15 +94,16 @@ one element:
   Phase 2 throughput optimization, not a correctness need.
 - **The API streams HLS objects itself** after validating the playback token;
   nginx in front caches them. Phase 2 moves segment serving to nginx directly.
-- **Sorting by InstanceNumber**; geometric sort by ImagePositionPatient is
-  Phase 2. Single-rendition ladder (CRF 18 "high" only). CR/DX stills and the
+- **Single-rendition ladder** (CRF 18 "high" only). CR/DX stills and the
   export-MP4 path are skipped.
 - **libx264 software encoding**; NVENC lands in Phase 2 on GPU hosts.
 
 What already matches the design: the OAuth2/OIDC integration contract
 (client registry with per-app scopes and IdP, RFC 8693 token exchange,
 client_credentials, JWKS validation for RS256 IdPs), convert-on-arrival via
-the stable-study webhook, all-intra encoding for CT/MRI stacks (frame-accurate scrubbing),
+the stable-study webhook, geometric slice ordering (ImagePositionPatient projected onto the
+series normal, InstanceNumber fallback), all-intra encoding for CT/MRI stacks
+(frame-accurate scrubbing),
 native cine rates for US/XA from the DICOM tags, three hardcoded CT window
 presets (soft/lung/bone) as separate renditions, prefix-scoped HMAC playback
 tokens, per-view audit events, and provider-neutral storage (MinIO/S3/Azure/GCS
