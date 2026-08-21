@@ -27,6 +27,7 @@ struct Worker {
     db: PgPool,
     store: Storage,
     orthanc: Orthanc,
+    encoder: encode::Encoder,
 }
 
 #[tokio::main]
@@ -39,10 +40,12 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = Config::from_env()?;
+    let encoder_pref = std::env::var("OMV_ENCODER").unwrap_or_else(|_| "auto".into());
     let worker = Worker {
         db: PgPoolOptions::new().max_connections(4).connect(&cfg.database_url).await?,
         store: Storage::from_url(&cfg.storage_url)?,
         orthanc: Orthanc::new(&cfg.orthanc_url, &cfg.orthanc_user, &cfg.orthanc_password),
+        encoder: encode::detect_encoder(&encoder_pref).await?,
         cfg,
     };
 
@@ -243,7 +246,7 @@ impl Worker {
         let mut renditions = Vec::new();
         for preset in models::presets_for(&modality) {
             let dir = tempfile::tempdir().context("tempdir")?;
-            let mut enc = encode::HlsEncoder::start(dir.path(), fps, !cine)?;
+            let mut enc = encode::HlsEncoder::start(dir.path(), fps, !cine, self.encoder)?;
             for (instance_id, frame) in &frames {
                 let png = self
                     .orthanc
@@ -253,7 +256,7 @@ impl Worker {
             }
             enc.finish().await?;
             // export.mp4 lands in the same dir and uploads with the segments.
-            encode::mux_export(dir.path()).await?;
+            encode::mux_export(dir.path(), self.encoder).await?;
 
             let prefix = format!("studies/{study_uid}/{series_uid}/{}", preset.key);
             self.upload_dir(dir.path(), &prefix).await?;

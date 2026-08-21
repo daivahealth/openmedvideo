@@ -1,0 +1,23 @@
+# GPU overlay for NVENC encoding (design §4.3). On a host with an NVIDIA
+# GPU, the nvidia-container-toolkit installed, and a CUDA-enabled Docker:
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up --build
+#
+# OMV_ENCODER=nvenc makes the worker fail fast if the GPU is not actually
+# usable, instead of silently encoding ~10-20x slower on CPU. Use "auto" if
+# a mixed fleet should degrade gracefully instead.
+#
+# Note: Debian bookworm's ffmpeg ships with h264_nvenc enabled; it only needs
+# the NVIDIA driver libraries injected by the container toolkit at runtime.
+services:
+  worker:
+    environment:
+      OMV_ENCODER: nvenc
+      NVIDIA_DRIVER_CAPABILITIES: video,compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, video]

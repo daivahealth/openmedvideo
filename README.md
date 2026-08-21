@@ -95,7 +95,12 @@ one element:
 - **The API streams HLS objects itself** after validating the playback token;
   nginx in front caches them. Phase 2 moves segment serving to nginx directly.
 - **Single-rendition ladder** (CRF 18 "high" only). CR/DX stills are skipped.
-- **libx264 software encoding**; NVENC lands in Phase 2 on GPU hosts.
+- **libx264 software encoding by default.** On a GPU host, add the NVENC
+  overlay: `docker compose -f deploy/docker-compose.yml -f
+  deploy/docker-compose.gpu.yml up --build`. The worker smoke-tests
+  `h264_nvenc` with a real encode at startup: `OMV_ENCODER=auto` (default)
+  falls back to libx264 when no usable GPU is present; `nvenc` fails fast on
+  a misconfigured GPU host; `x264` forces software.
 
 What already matches the design: the OAuth2/OIDC integration contract
 (client registry with per-app scopes and IdP, RFC 8693 token exchange,

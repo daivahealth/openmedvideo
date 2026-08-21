@@ -6,6 +6,89 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, Command};
+use tracing::info;
+
+/// Video encoder backend (design §4.3): NVENC on GPU hosts is a 10-20x
+/// throughput win; libx264 is the universal software fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoder {
+    Nvenc,
+    X264,
+}
+
+impl Encoder {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Nvenc => "h264_nvenc",
+            Self::X264 => "libx264",
+        }
+    }
+
+    /// Codec + quality arguments. `quality` is CRF for x264 and CQ for
+    /// NVENC — the same "smaller is better" dial in both worlds.
+    pub fn quality_args(self, quality: u8) -> Vec<String> {
+        let q = quality.to_string();
+        match self {
+            Self::X264 => vec![
+                "-c:v".into(), "libx264".into(),
+                "-preset".into(), "veryfast".into(),
+                "-crf".into(), q,
+            ],
+            Self::Nvenc => vec![
+                "-c:v".into(), "h264_nvenc".into(),
+                "-preset".into(), "p5".into(),
+                "-tune".into(), "hq".into(),
+                "-rc".into(), "vbr".into(),
+                "-cq".into(), q,
+                "-b:v".into(), "0".into(),
+            ],
+        }
+    }
+}
+
+/// Resolves the encoder from the OMV_ENCODER preference:
+///   "auto" (default) — use NVENC when a working GPU session opens, else x264
+///   "nvenc"          — require NVENC; fail fast so a misconfigured GPU host
+///                      surfaces in ops instead of silently encoding 10x slower
+///   "x264"           — force software
+///
+/// Detection is a real encode smoke-test, not a check of ffmpeg's compiled-in
+/// encoder list: h264_nvenc is often present in the build but unusable
+/// without an NVIDIA device/driver.
+pub async fn detect_encoder(pref: &str) -> Result<Encoder> {
+    let enc = match pref {
+        "x264" => Encoder::X264,
+        "nvenc" => {
+            if !nvenc_works().await {
+                bail!("OMV_ENCODER=nvenc but h264_nvenc cannot initialize \
+                       (no NVIDIA device/driver visible to ffmpeg?)");
+            }
+            Encoder::Nvenc
+        }
+        _ => {
+            if nvenc_works().await {
+                Encoder::Nvenc
+            } else {
+                info!("h264_nvenc unavailable, using libx264");
+                Encoder::X264
+            }
+        }
+    };
+    info!(encoder = enc.name(), "video encoder selected");
+    Ok(enc)
+}
+
+async fn nvenc_works() -> bool {
+    Command::new("ffmpeg")
+        .args(["-v", "error", "-f", "lavfi", "-i", "color=black:size=64x64:rate=1"])
+        .args(["-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 
 pub struct HlsEncoder {
     child: Child,
@@ -18,7 +101,7 @@ impl HlsEncoder {
     /// `all_intra` is used for CT/MRI stacks (design D6): every frame is a
     /// keyframe so players can frame-step and seek instantly. Cine content
     /// uses a ~1s GOP instead.
-    pub fn start(out_dir: &Path, fps: f64, all_intra: bool) -> Result<Self> {
+    pub fn start(out_dir: &Path, fps: f64, all_intra: bool, encoder: Encoder) -> Result<Self> {
         let gop = if all_intra { 1 } else { fps.round().max(1.0) as i64 };
         let seg = out_dir.join("seg_%05d.m4s");
         let playlist = out_dir.join("index.m3u8");
@@ -27,9 +110,9 @@ impl HlsEncoder {
             .args(["-y", "-hide_banner", "-loglevel", "error"])
             .args(["-f", "image2pipe", "-framerate", &fps.to_string(), "-i", "pipe:0"])
             .arg("-an")
-            .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"])
-            // Medical grayscale bands easily at low bitrates; CRF 18 is the
-            // quality-targeted setting from design §4.3.
+            // Medical grayscale bands easily at low bitrates; quality 18 is
+            // the quality-targeted setting from design §4.3.
+            .args(encoder.quality_args(18))
             .args(["-pix_fmt", "yuv420p"])
             // yuv420p requires even dimensions; some detectors/US crops are odd.
             .args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"])
@@ -78,7 +161,7 @@ const EXPORT_SIZE_LIMIT: u64 = 14 * 1024 * 1024;
 /// identical quality. If that lands over the size limit (long stacks, big
 /// matrices), it re-encodes with a normal GOP and higher CRF: an export is
 /// watched, not frame-stepped, so all-intra isn't needed there.
-pub async fn mux_export(out_dir: &Path) -> Result<std::path::PathBuf> {
+pub async fn mux_export(out_dir: &Path, encoder: Encoder) -> Result<std::path::PathBuf> {
     let playlist = out_dir.join("index.m3u8");
     let export = out_dir.join("export.mp4");
 
@@ -106,16 +189,41 @@ pub async fn mux_export(out_dir: &Path) -> Result<std::path::PathBuf> {
     .await?;
 
     if std::fs::metadata(&export)?.len() > EXPORT_SIZE_LIMIT {
-        run(vec![
-            "-i".into(), p,
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "veryfast".into(),
-            "-crf".into(), "26".into(),
+        let mut args = vec!["-i".into(), p];
+        args.extend(encoder.quality_args(26));
+        args.extend([
             "-pix_fmt".into(), "yuv420p".into(),
             "-movflags".into(), "+faststart".into(),
             e,
-        ])
-        .await?;
+        ]);
+        run(args).await?;
     }
     Ok(export)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quality_args_per_encoder() {
+        let x = Encoder::X264.quality_args(18);
+        assert!(x.contains(&"libx264".to_string()) && x.contains(&"-crf".to_string()));
+        let n = Encoder::Nvenc.quality_args(19);
+        assert!(n.contains(&"h264_nvenc".to_string()));
+        assert!(n.contains(&"-cq".to_string()) && n.contains(&"19".to_string()));
+        assert!(!n.contains(&"-crf".to_string()), "CRF is an x264 dial, not NVENC's");
+    }
+
+    #[tokio::test]
+    async fn forced_nvenc_fails_fast_without_gpu() {
+        // On hosts without an NVIDIA device (this CI/dev box), forcing nvenc
+        // must be a hard error, and auto must fall back to x264.
+        if nvenc_works().await {
+            return; // actually on a GPU box — nothing to assert here
+        }
+        assert!(detect_encoder("nvenc").await.is_err());
+        assert_eq!(detect_encoder("auto").await.unwrap(), Encoder::X264);
+        assert_eq!(detect_encoder("x264").await.unwrap(), Encoder::X264);
+    }
 }
