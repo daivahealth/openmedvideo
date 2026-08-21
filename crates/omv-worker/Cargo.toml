@@ -1,0 +1,19 @@
+[package]
+name = "omv-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+omv-core = { path = "../omv-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+redis.workspace = true
+sqlx.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+tempfile.workspace = true

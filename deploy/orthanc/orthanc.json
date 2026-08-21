@@ -1,0 +1,18 @@
+{
+  "Name": "OpenMedVideo Ingest",
+  "DicomAet": "OMV",
+  "DicomPort": 4242,
+  "HttpPort": 8042,
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+  "RegisteredUsers": { "omv": "omv" },
+
+  "LuaScripts": ["/etc/orthanc/omv-hook.lua"],
+
+  "// StableAge": "Seconds a study must sit unchanged before OnStableStudy fires.",
+  "// ": "CT slices trickle in over seconds; never convert a partial series (design §3.1).",
+  "StableAge": 30,
+
+  "DicomModalities": {},
+  "OverwriteInstances": true
+}
