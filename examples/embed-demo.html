@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>omv-player embed demo</title>
+<style>
+  body { font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+  omv-player { height: 560px; width: 100%; }
+  code { background: #eee; padding: .1em .3em; border-radius: 3px; }
+  #log { color: #666; font-size: 13px; white-space: pre-line; }
+</style>
+</head>
+<body>
+<h1>Embedding &lt;omv-player&gt;</h1>
+<p>This page simulates a client app on a <em>different origin</em> than the
+OMV server. Open it as:</p>
+<p><code>embed-demo.html?server=http://localhost:8000&amp;study=&lt;StudyInstanceUID&gt;&amp;token=&lt;playback token&gt;</code></p>
+<p>(Get the study UID and a fresh token from <code>GET /v1/studies/{uid}</code>;
+the token also sits inside the returned <code>player_url</code>.)</p>
+<div id="mount"></div>
+<p id="log"></p>
+<script>
+  const q = new URLSearchParams(location.search);
+  const server = q.get("server") || "http://localhost:8000";
+
+  // Load the component from the OMV server — the only script a client needs.
+  const s = document.createElement("script");
+  s.src = `${server}/player-assets/omv-player.js`;
+  s.onload = () => {
+    const el = document.createElement("omv-player");
+    el.setAttribute("server", server);
+    el.setAttribute("study-id", q.get("study") || "");
+    el.setAttribute("token", q.get("token") || "");
+    const log = (m) => (document.getElementById("log").textContent += m + "\n");
+    el.addEventListener("omv-ready", (e) => log(`ready: ${e.detail.studyUid}`));
+    el.addEventListener("omv-error", (e) => log(`error: ${e.detail.message}`));
+    el.addEventListener("omv-frame", (e) =>
+      (document.title = `frame ${e.detail.frame}/${e.detail.frames}`));
+    document.getElementById("mount").appendChild(el);
+  };
+  document.head.appendChild(s);
+</script>
+</body>
+</html>

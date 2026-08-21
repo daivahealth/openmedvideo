@@ -5,209 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>OpenMedVideo</title>
 <style>
-  :root {
-    --bg: #0c0f12; --panel: #161b20; --ink: #dce4ea; --muted: #8fa0ad;
-    --accent: #4fb8c0; --line: #26323c;
-  }
-  * { box-sizing: border-box; margin: 0; }
-  html, body { height: 100%; }
-  body {
-    background: var(--bg); color: var(--ink);
-    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    display: flex; flex-direction: column;
-    -webkit-user-select: none; user-select: none;
-    touch-action: manipulation;
-  }
-  header {
-    padding: 10px 14px 8px; border-bottom: 1px solid var(--line);
-    display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline;
-  }
-  header .title { font-weight: 600; }
-  header .mod { color: var(--accent); font-weight: 600; letter-spacing: .05em; }
-  #series-bar, #preset-bar {
-    display: flex; gap: 6px; padding: 8px 14px 0; flex-wrap: wrap;
-  }
-  .tab {
-    background: var(--panel); color: var(--muted); border: 1px solid var(--line);
-    border-radius: 999px; padding: 5px 14px; font-size: 13px; cursor: pointer;
-  }
-  .tab.active { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
-  #stage {
-    flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
-    padding: 10px 14px;
-  }
-  video { max-width: 100%; max-height: 100%; background: #000; border-radius: 6px; }
-  #controls {
-    padding: 6px 14px 10px; display: flex; flex-direction: column; gap: 6px;
-  }
-  #scrub-row { display: flex; align-items: center; gap: 10px; }
-  input[type=range] { flex: 1; accent-color: var(--accent); height: 28px; }
-  #counter {
-    font-variant-numeric: tabular-nums; color: var(--ink); min-width: 76px; text-align: right;
-    font-size: 15px;
-  }
-  #buttons { display: flex; gap: 8px; justify-content: center; }
-  #buttons button {
-    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 8px; padding: 8px 18px; font-size: 16px; cursor: pointer; min-width: 56px;
-  }
-  #buttons button:active { background: var(--accent); color: var(--bg); }
-  footer {
-    padding: 6px 14px 10px; color: var(--muted); font-size: 11.5px;
-    border-top: 1px solid var(--line); text-align: center;
-  }
-  #error { color: #e0a93e; padding: 20px; text-align: center; }
+  * { margin: 0; }
+  html, body { height: 100%; background: #0c0f12; }
+  omv-player { height: 100%; border-radius: 0; }
+  #error { color: #e0a93e; padding: 20px; text-align: center;
+    font: 14px -apple-system, "Segoe UI", Roboto, sans-serif; }
 </style>
+<script src="/player-assets/omv-player.js"></script>
 </head>
 <body>
-<header>
-  <span class="mod" id="modality"></span>
-  <span class="title" id="title">Loading…</span>
-  <span id="series-desc" style="color:var(--muted)"></span>
-</header>
-<div id="series-bar"></div>
-<div id="preset-bar"></div>
-<div id="stage"><video id="video" playsinline preload="auto"></video></div>
-<div id="controls">
-  <div id="scrub-row">
-    <input type="range" id="scrub" min="1" max="1" step="1" value="1" aria-label="Frame">
-    <span id="counter">–/–</span>
-  </div>
-  <div id="buttons">
-    <button id="back" title="Previous frame (←)">⏮</button>
-    <button id="play" title="Play/pause (space)">▶</button>
-    <button id="fwd" title="Next frame (→)">⏭</button>
-    <button id="loop" title="Loop">🔁</button>
-  </div>
-</div>
-<footer id="disclaimer"></footer>
-<script src="/player-assets/hls.min.js"></script>
 <script>
-(async function () {
-  // URL shape: /player/{token}/{study_uid}
+  // The embeddable page (tier 1) is a thin shell over <omv-player> (tier 2):
+  // one codebase for both. URL shape: /player/{token}/{study_uid}
   const parts = location.pathname.split("/").filter(Boolean);
-  const token = parts[1], studyUid = parts[2];
-  const base = `/stream/${token}/studies/${studyUid}`;
-
-  const $ = (id) => document.getElementById(id);
-  const video = $("video"), scrub = $("scrub"), counter = $("counter");
-
-  let manifest;
-  try {
-    const res = await fetch(`${base}/manifest.json`);
-    if (!res.ok) throw new Error(res.status);
-    manifest = await res.json();
-  } catch (e) {
-    document.body.innerHTML =
-      '<p id="error">Could not load the study — the link may have expired. ' +
-      'Reopen it from your app to get a fresh one.</p>';
-    return;
+  if (parts.length >= 3) {
+    const el = document.createElement("omv-player");
+    el.setAttribute("token", parts[1]);
+    el.setAttribute("study-id", parts[2]);
+    document.body.appendChild(el);
+    el.focus();
+  } else {
+    document.body.innerHTML = '<p id="error">Malformed player link.</p>';
   }
-
-  $("title").textContent = manifest.description || "Imaging study";
-  $("disclaimer").textContent = manifest.disclaimer;
-  video.poster = `${base}/poster.jpg`;
-
-  // Group renditions: one entry per series, presets within it.
-  const seriesList = [];
-  for (const r of manifest.renditions) {
-    let s = seriesList.find((s) => s.uid === r.series_uid);
-    if (!s) {
-      s = { uid: r.series_uid, desc: r.series_description, modality: r.modality, presets: [] };
-      seriesList.push(s);
-    }
-    s.presets.push(r);
-  }
-
-  let curSeries = 0, curPreset = 0, hls = null, fps = 8, frames = 1, looping = false;
-
-  function renderTabs() {
-    const sBar = $("series-bar"), pBar = $("preset-bar");
-    sBar.innerHTML = pBar.innerHTML = "";
-    sBar.style.display = seriesList.length > 1 ? "" : "none";
-    seriesList.forEach((s, i) => {
-      const b = document.createElement("button");
-      b.className = "tab" + (i === curSeries ? " active" : "");
-      b.textContent = `${s.modality} · ${s.desc || "Series " + (i + 1)}`;
-      b.onclick = () => { curSeries = i; curPreset = 0; load(false); };
-      sBar.appendChild(b);
-    });
-    const presets = seriesList[curSeries].presets;
-    pBar.style.display = presets.length > 1 ? "" : "none";
-    presets.forEach((p, i) => {
-      const b = document.createElement("button");
-      b.className = "tab" + (i === curPreset ? " active" : "");
-      b.textContent = p.preset_label;
-      // Same series, different window: preserve the playback position.
-      b.onclick = () => { curPreset = i; load(true); };
-      pBar.appendChild(b);
-    });
-  }
-
-  function load(keepPosition) {
-    const s = seriesList[curSeries], r = s.presets[curPreset];
-    const keep = keepPosition ? video.currentTime : 0;
-    fps = r.fps; frames = r.frames;
-    scrub.max = frames;
-    $("modality").textContent = s.modality;
-    $("series-desc").textContent = s.desc;
-    renderTabs();
-
-    const src = `${base}/${r.playlist}`;
-    if (hls) { hls.destroy(); hls = null; }
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = src;                    // Safari / iOS: native HLS
-    } else if (window.Hls && Hls.isSupported()) {
-      hls = new Hls({ maxBufferLength: 120 });
-      hls.loadSource(src);
-      hls.attachMedia(video);
-    } else {
-      video.src = src;
-    }
-    video.addEventListener("loadedmetadata", () => { video.currentTime = keep; },
-      { once: true });
-  }
-
-  // --- frame <-> time mapping -------------------------------------------
-  const frameOf = (t) => Math.min(frames, Math.max(1, Math.round(t * fps) + 1));
-  const timeOf = (f) => (f - 1) / fps + 0.001; // epsilon lands inside the frame
-
-  function tick() {
-    const f = frameOf(video.currentTime);
-    counter.textContent = `${f}/${frames}`;
-    if (document.activeElement !== scrub) scrub.value = f;
-    $("play").textContent = video.paused ? "▶" : "⏸";
-    requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-
-  scrub.addEventListener("input", () => {
-    video.pause();
-    video.currentTime = timeOf(+scrub.value);
-  });
-
-  const step = (d) => {
-    video.pause();
-    video.currentTime = timeOf(frameOf(video.currentTime) + d);
-  };
-  $("back").onclick = () => step(-1);
-  $("fwd").onclick = () => step(1);
-  $("play").onclick = () => (video.paused ? video.play() : video.pause());
-  $("loop").onclick = (e) => {
-    looping = video.loop = !looping;
-    e.target.style.color = looping ? "var(--accent)" : "";
-  };
-  video.onclick = $("play").onclick;
-  video.addEventListener("ended", () => { if (!looping) video.pause(); });
-
-  document.addEventListener("keydown", (e) => {
-    if (e.key === " ") { e.preventDefault(); $("play").onclick(); }
-    else if (e.key === "ArrowLeft") step(-1);
-    else if (e.key === "ArrowRight") step(1);
-  });
-
-  load(false);
-})();
 </script>
 </body>
 </html>

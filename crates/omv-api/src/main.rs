@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
-use tower_http::trace::TraceLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 
 #[derive(Clone)]
@@ -62,7 +62,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/stream/{token}/{*key}", get(stream_object))
         .route("/player/{token}/{study_uid}", get(player_page))
         .route("/player-assets/hls.min.js", get(hls_js))
+        .route("/player-assets/omv-player.js", get(omv_player_js))
         .layer(TraceLayer::new_for_http())
+        // Cross-origin embeds of <omv-player> need to fetch /stream and
+        // /player-assets from other origins. Access control is the playback
+        // token and bearer auth, not the Origin header, so permissive CORS
+        // does not widen access.
+        .layer(CorsLayer::permissive())
         .with_state(state.clone());
 
     info!(addr = %state.cfg.bind_addr, "omv-api listening");
@@ -243,6 +249,19 @@ async fn hls_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
         ],
         include_str!("../assets/vendor/hls.min.js"),
+    )
+}
+
+/// The <omv-player> Web Component (design §5.3 tier 2). Host apps include
+/// this one script and drop <omv-player server token study-id> anywhere;
+/// framework packages are thin wrappers over it.
+async fn omv_player_js() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        include_str!("../assets/omv-player.js"),
     )
 }
 

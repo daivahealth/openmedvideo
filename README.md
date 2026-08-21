@@ -52,6 +52,30 @@ The player is fully self-contained: hls.js (v1.6.15, Apache-2.0) is vendored
 into the API binary and served at `/player-assets/hls.min.js`, so it works on
 offline hospital networks with no CDN dependency.
 
+## Embedding the player in your own app (`<omv-player>`)
+
+The player UI is a framework-agnostic **Web Component** (design §5.3 tier 2) —
+the `/player/...` page above is just a thin shell over it. Any web app
+(Angular, React, Vue, plain HTML, or a WebView) embeds it with one script and
+one element:
+
+```html
+<script src="https://your-omv-server/player-assets/omv-player.js"></script>
+<omv-player server="https://your-omv-server"
+            study-id="1.2.840..."
+            token="<playback token from GET /v1/studies/{uid}>">
+</omv-player>
+```
+
+- Size it from CSS (it fills its host). Theme it via `--omv-accent`,
+  `--omv-bg`, … custom properties.
+- Events: `omv-ready`, `omv-error`, `omv-frame` (`{frame, frames}`).
+  Methods: `el.step(±1)`, `el.gotoFrame(n)`.
+- hls.js is lazy-loaded from the server only when the browser lacks native
+  HLS. The API sends permissive CORS on `/stream` and `/player-assets`
+  (access control is the playback token, not the Origin header).
+- Runnable example: [examples/embed-demo.html](examples/embed-demo.html).
+
 ## Phase 1 design shortcuts (deliberate)
 
 - **Orthanc renders the frames** (`/instances/…/rendered`): it applies the
