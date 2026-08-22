@@ -5,6 +5,7 @@
 //! registers renditions in the catalog. Stateless: run as many as needed.
 
 mod encode;
+mod notify;
 mod orthanc;
 mod sorting;
 
@@ -19,7 +20,7 @@ use redis::streams::{StreamReadOptions, StreamReadReply};
 use redis::AsyncCommands;
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tracing::{error, info, warn};
 
 struct Worker {
@@ -28,6 +29,7 @@ struct Worker {
     store: Storage,
     orthanc: Orthanc,
     encoder: encode::Encoder,
+    notifier: notify::Notifier,
 }
 
 #[tokio::main]
@@ -46,6 +48,7 @@ async fn main() -> Result<()> {
         store: Storage::from_url(&cfg.storage_url)?,
         orthanc: Orthanc::new(&cfg.orthanc_url, &cfg.orthanc_user, &cfg.orthanc_password),
         encoder: encode::detect_encoder(&encoder_pref).await?,
+        notifier: notify::Notifier::default(),
         cfg,
     };
 
@@ -106,13 +109,23 @@ async fn main() -> Result<()> {
 
 impl Worker {
     async fn mark_failed(&self, orthanc_id: &str, err: &str) {
-        let _ = sqlx::query(
-            "UPDATE studies SET status='failed', error=$2, updated_at=now() WHERE orthanc_id=$1",
+        let row = sqlx::query(
+            "UPDATE studies SET status='failed', error=$2, updated_at=now()
+             WHERE orthanc_id=$1 RETURNING study_uid",
         )
         .bind(orthanc_id)
         .bind(err)
-        .execute(&self.db)
+        .fetch_optional(&self.db)
         .await;
+        if let Ok(Some(r)) = row {
+            let study_uid: String = r.get("study_uid");
+            self.notifier
+                .broadcast(&self.db, "study.failed", serde_json::json!({
+                    "study_uid": study_uid,
+                    "error": err,
+                }))
+                .await;
+        }
     }
 
     async fn process_study(&self, orthanc_id: &str) -> Result<()> {
@@ -200,6 +213,16 @@ impl Worker {
         .bind(modalities.join(","))
         .execute(&self.db)
         .await?;
+
+        let event = if status == StudyStatus::Ready { "study.ready" } else { "study.failed" };
+        self.notifier
+            .broadcast(&self.db, event, serde_json::json!({
+                "study_uid": study_uid,
+                "description": description,
+                "modalities": modalities.join(","),
+                "renditions": renditions.len(),
+            }))
+            .await;
 
         info!(study = %study_uid, renditions = renditions.len(), "study ready");
         Ok(())

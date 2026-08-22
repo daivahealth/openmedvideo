@@ -17,3 +17,6 @@ sqlx.workspace = true
 reqwest.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true

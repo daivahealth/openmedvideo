@@ -118,6 +118,16 @@ exceeds the WhatsApp-safe ~14 MB), downloadable via each rendition's
 (denials too), and can be disabled deployment-wide with
 `OMV_EXPORT_ENABLED=0`.
 
+**Study-ready webhooks:** clients with a `webhook_url` registered receive
+`study.ready` / `study.failed` events as JSON POSTs, HMAC-signed with the
+client's `webhook_secret` (`X-OMV-Signature: sha256=<hex>` over the raw
+body; verify before parsing). Delivery retries 3 times with backoff and
+never blocks conversion. Register with:
+```sql
+UPDATE clients SET webhook_url='https://your-app/omv-hook',
+                   webhook_secret='<random>' WHERE client_id='<app>';
+```
+
 ## Development
 
 ```bash
