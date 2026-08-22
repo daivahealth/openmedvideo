@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| Status | Draft v1.0 |
-| Date | 2026-08-21 |
+| Status | v1.1 — Phases 1–2 engineering built and verified; see §9 |
+| Date | 2026-08-22 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
 
@@ -262,17 +262,54 @@ Append-only audit table: `{who (practitioner id), via (client app id), what (stu
 
 ## 9. Rollout plan
 
-### Phase 1 — MVP (single box, one hospital)
+### Phase 1 — MVP (single box) — ✅ built and verified, 2026-08-21
 
-Orthanc + Redis + one Rust worker (libx264, no GPU) + MinIO + streaming/catalog API + nginx. **Start with US and XA** (native cine, highest wow-to-effort ratio), CT with hardcoded window presets. Manual pilot with a small clinician group.
+The full compose stack (Orthanc + Redis + Postgres + MinIO + Rust worker +
+streaming/catalog API + nginx cache) converts and streams end-to-end. Measured
+against the exit criteria with a synthetic US cine + 40-slice CT study:
+conversion completed **~0.7 s** after the stable-study webhook (~35 s
+doctor-visible including Orthanc's 30 s stable window — well under the ≤5 min
+target), producing 4 renditions (CT soft/lung/bone at 8 fps all-intra, US at
+its native 20 fps from the DICOM tags); ffprobe validated the HLS through
+nginx; tampered tokens and wrong bearers were rejected; audit events recorded.
 
-*Exit criteria:* a study sent from a modality is playable in a test app ≤5 min later; audit events recorded.
+*Still open from Phase 1 scope:* pilot with a real clinician group on real
+modality data.
 
-### Phase 2 — Production hardening
+### Phase 2 — Production hardening — engineering ✅ (2026-08-22), operational items open
 
-GPU worker (NVENC), body-part-driven CT presets, PHI-strip rules per modality model, the full integration contract (client registry, token exchange, OpenAPI spec, signed webhooks), AADI as first registered client (slice scrub bar, preset switcher), embeddable web player, monitoring (queue depth, conversion p95, playback error rate), 60 s SLO.
+Built and verified:
+- **Integration contract**: client registry (`clients` table — onboarding an
+  app is a row, not a release), RFC 8693 token exchange + client_credentials,
+  JWKS validation for RS256 IdPs, scope enforcement at issuance and use,
+  practitioner identity flowing into the audit trail.
+- **Players**: embeddable web player (tier 1, one tokenized URL) and the
+  `<omv-player>` Web Component (tier 2) sharing one codebase — slice scrub
+  bar, ±1 frame stepping, preset/series tabs, events and theming hooks for
+  host apps; hls.js vendored into the binary (offline hospital networks),
+  CORS for cross-origin embeds.
+- **Geometric slice ordering**: ImagePositionPatient projected onto the
+  series normal, InstanceNumber fallback on missing/degenerate geometry;
+  verified at the pixel level against a scrambled-InstanceNumber study.
+- **Export MP4**: lossless re-mux per rendition (re-encoded only if over the
+  WhatsApp-safe ~14 MB), gated by the `imaging.export` scope, audited
+  (denials included), deployment-wide kill switch.
+- **NVENC**: runtime smoke-test detection (auto/nvenc/x264), fail-fast on
+  misconfigured GPU hosts, GPU compose overlay. Throughput validation awaits
+  actual GPU hardware.
+- **Signed webhooks**: `study.ready`/`study.failed` HMAC-signed per client,
+  bounded retries, verified receiver-side.
 
-### Phase 3 — Scale-out
+Open (operational, mostly needing real data/infra):
+- PHI-strip rules per modality model and burned-in-annotation handling —
+  driven by what real NH modalities actually emit.
+- Body-part-driven CT preset selection (BodyPartExamined).
+- AADI's real IdP registered in the client registry; AADI player integration.
+- Monitoring (queue depth, conversion p95, playback error rate) and the 60 s
+  SLO measured on production hardware; dead-letter retry queue.
+- Regression corpus from real-world DICOM failures.
+
+### Phase 3 — Scale-out (not started)
 
 Multi-hospital ingest, second and third client apps onboarded via the registry (nurse app, web portal), FHIR `ImagingStudy`/`Endpoint` exposure, regional edge caches/CDN, coronal/sagittal reformats for CT, storage lifecycle + regenerate-on-demand, capacity planning from measured volumes.
 
