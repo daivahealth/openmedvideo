@@ -17,6 +17,7 @@ The supported topology today is the **Phase 1/2 single box**: everything runs as
 | `minio-init` | `minio/mc` | One-shot: creates the `medvideo` bucket | — |
 | `api` | built from `deploy/Dockerfile` (target `api`) | OAuth, catalog, FHIR, playback tokens, HLS serving, players, audit | — (stateless) |
 | `worker` | built from `deploy/Dockerfile` (target `worker`) | DICOM → ffmpeg → HLS conversion, PHI stripping, retries | — (stateless) |
+| `prometheus` | `prom/prometheus` | Scrapes api + worker metrics (`deploy/prometheus.yml`) | none (dev stack; point your own Prometheus at the targets in production) |
 | `nginx` | `nginx:alpine` | The only exposed edge: proxying, HLS segment cache, (production) TLS | cache only |
 
 Traffic flow: modalities send DICOM to Orthanc on **4242**; client apps talk HTTPS to **nginx only**. Orthanc's Lua hook (`deploy/orthanc/omv-hook.lua`) POSTs the idempotent `POST /internal/orthanc-event` to the API when a study becomes stable (`StableAge: 30` in `deploy/orthanc/orthanc.json`); the worker consumes the Redis job and writes video objects to storage.
@@ -58,6 +59,8 @@ The overlay sets `OMV_ENCODER=nvenc` and reserves one GPU with `video` capabilit
 | 4242 | Orthanc DICOM | Modality/PACS VLANs only |
 | 8042 | Orthanc UI/REST | **Dev only** — never on production networks |
 | 9001 | MinIO console | **Dev only** |
+| 9090 | Prometheus UI | **Dev only** |
+| 9464 | api/worker `/metrics` (`OMV_METRICS_ADDR`) | Internal only — deliberately not proxied by nginx, so metrics never reach the public edge |
 
 ---
 
@@ -82,7 +85,7 @@ The shipped compose file is a **dev stack**. Before real patient data touches it
 - [ ] PHI rules: mount a reviewed `phi-rules.json` (`OMV_PHI_RULES`) and decide the unmatched-burned-in policy — default converts with a loud warning; `OMV_PHI_UNMATCHED_BURNEDIN=skip` refuses such series. See User Manual §8.
 - [ ] Decide `OMV_EXPORT_ENABLED` (MP4 export kill switch) per deployment policy.
 
-**Still open at v1.5 (design §9):** production monitoring (queue depth, conversion p95, playback error rate), measurement of the 60 s SLO on production hardware, and a regression corpus from real-world DICOM. Plan these before go-live.
+**Monitoring:** metrics for all the design's SLIs are built in (§10) — wire the two `:9464` targets into your production Prometheus and alert on them. **Still open (design §9):** measuring the 60 s SLO on production hardware and a regression corpus from real-world DICOM. Plan these before go-live.
 
 ---
 
@@ -153,4 +156,14 @@ Onboarding an app is a row in the `clients` table, not a release: client id + se
   (from inside the network — `/internal/*` must never be exposed through the edge).
 - **Cache:** nginx caches `/stream/` responses for 5 min (`X-Cache-Status` header shows HIT/MISS); segments are immutable once written, so the cache never serves stale media.
 - **Logs:** all services log to stdout (`RUST_LOG=info` by default); use your host's log driver/shipper.
-- **Monitoring (to build, design §9):** queue depth, conversion p95 vs the 60 s SLO, playback error rate, dead-letter arrivals.
+- **Metrics:** both services expose Prometheus metrics at `/metrics` on internal port 9464 (`OMV_METRICS_ADDR`); the dev stack runs Prometheus at `http://localhost:9090` scraping both. The key queries per SLI (also documented in `deploy/prometheus.yml`):
+
+  | SLI | Query |
+  |---|---|
+  | Queue depth | `omv_queue_depth`, `omv_queue_pending` |
+  | Conversion p95 | `histogram_quantile(0.95, rate(omv_conversion_seconds_bucket[5m]))` |
+  | 60 s SLO compliance (enqueue→outcome, incl. queue wait and retries) | `sum(rate(omv_job_total_seconds_bucket{le="60"}[1h])) / sum(rate(omv_job_total_seconds_count[1h]))` |
+  | Playback error rate | `1 - rate(omv_playback_requests_total{outcome="ok"}[5m]) / rate(omv_playback_requests_total[5m])` |
+  | Dead-letter arrivals | `increase(omv_conversions_total{outcome="dead_letter"}[1h])` |
+
+  Also available: `omv_webhook_deliveries_total{delivered|gave_up}` and per-route `omv_http_requests_total` / `omv_http_request_seconds` (labeled by matched route template, so study UIDs never explode cardinality). Alert at minimum on dead-letter arrivals, sustained queue depth, and playback error rate.
