@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v1.4 — Phases 1–2 engineering built and verified, incl. FHIR, body-part CT presets, and the PHI-strip framework; see §9 |
+| Status | v1.5 — Phases 1–2 engineering built and verified, incl. FHIR, body-part presets, PHI-strip framework, and the dead-letter retry queue; see §9 |
 | Date | 2026-08-24 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
@@ -86,7 +86,7 @@ Modalities / PACS
 ### 3.1 Components
 
 1. **Ingest (Orthanc).** Modalities or the PACS auto-forward studies. Orthanc's *stable study* event (fires only after all instances have arrived — CT slices trickle in over seconds and conversion must never start on a partial series) enqueues a conversion job.
-2. **Job queue (Redis Streams or NATS JetStream).** At-least-once delivery, per-study jobs, retry with backoff, dead-letter queue for poison studies.
+2. **Job queue (Redis Streams).** At-least-once delivery, per-study jobs. Retry uses the stream's native pending-entries machinery: a failed job stays un-acked, is reclaimed via `XAUTOCLAIM` after a configurable idle backoff, and the stream's delivery counter is the attempt number — no separate retry bookkeeping to drift, and crash-safety falls out for free. After max attempts the job moves to the `omv:dead` stream with its final error; re-drive is a re-POST of the idempotent ingest event.
 3. **Conversion workers (Rust).** Stateless; scale horizontally. Detailed in §4.
 4. **Object storage (MinIO).** Bucket layout in §6. Encryption at rest (SSE), lifecycle expiry.
 5. **Streaming / Catalog API.** OAuth 2.0/OIDC token validation, per-client registration, study-level authorization, signed-URL issuance, webhook delivery, audit logging, and the catalog endpoints client apps render from. Detailed in §5 and §7.
@@ -325,6 +325,15 @@ Built and verified:
   image below is untouched (55.6). What remains is *rule content*: the
   per-machine rectangles for real NH modalities, which is ops configuration
   as machines are observed, not engineering.
+- **Dead-letter retry queue** (2026-08-24): failed conversions retry with
+  backoff (un-acked pending entries reclaimed via `XAUTOCLAIM`; the stream's
+  delivery counter is the attempt number), studies show `retrying` with the
+  error meanwhile, and after max attempts the job dead-letters to `omv:dead`
+  with its final error — only then does `study.failed` fire, so transient
+  errors never notify clients. Verified with real failure injection: MinIO
+  stopped → 3 attempts at the configured backoff → dead-lettered with the
+  full S3 error → MinIO restarted → one idempotent event re-POST converted
+  the same study to ready.
 
 Open (operational, mostly needing real data/infra):
 - PHI rule *content* for real NH machines (the framework, policy, and
@@ -332,7 +341,7 @@ Open (operational, mostly needing real data/infra):
   the mounted rules file as modalities are observed.
 - AADI's real IdP registered in the client registry; AADI player integration.
 - Monitoring (queue depth, conversion p95, playback error rate) and the 60 s
-  SLO measured on production hardware; dead-letter retry queue.
+  SLO measured on production hardware.
 - Regression corpus from real-world DICOM failures.
 
 ### Phase 3 — Scale-out (not started)
