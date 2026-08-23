@@ -100,7 +100,7 @@ Notes:
 curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8000/v1/studies
 ```
 
-Each entry carries `study_uid`, `description`, `modalities`, `status`, and `created_at`. Status moves `pending → converting → ready` (or `failed`).
+Each entry carries `study_uid`, `description`, `modalities`, `status`, and `created_at`. Status moves `pending → converting → ready`. A transient conversion failure shows `retrying` (with the error) while the job is automatically retried; only after all attempts are exhausted does the study go to `failed` (see §10.3 for re-driving it).
 
 **Get one study** — the playback entry point:
 
@@ -174,6 +174,7 @@ Clients with a registered `webhook_url` receive `study.ready` / `study.failed` e
 
 - Signature header: `X-OMV-Signature: sha256=<hex>` — HMAC-SHA256 over the raw request body. **Verify before parsing.**
 - Delivery retries 3 times with backoff and never blocks conversion.
+- `study.failed` fires **once, on permanent failure only** — after the conversion retry budget is exhausted (§10.3). Transient errors never notify clients.
 
 Register (currently a DB update):
 
@@ -243,6 +244,8 @@ Defaults live in `crates/omv-core/src/config.rs`; the full working set is in [de
 | `OMV_ACCESS_TOKEN_TTL_SECS` | `900` | OAuth access-token lifetime |
 | `OMV_EXPORT_ENABLED` | `1` | Deployment-wide MP4-export kill switch |
 | `OMV_ENCODER` | `auto` | `auto` / `nvenc` / `x264` (worker) |
+| `OMV_RETRY_IDLE_SECS` | `60` | Idle time before a failed job is reclaimed for retry (dev compose uses 15) (worker) |
+| `OMV_MAX_ATTEMPTS` | `4` | Conversion attempts before a job is dead-lettered (worker) |
 | `OMV_PHI_RULES` | — | Path to the PHI crop/mask rules JSON (worker) |
 | `OMV_PHI_UNMATCHED_BURNEDIN` | warn | `skip` refuses unmatched `BurnedInAnnotation=YES` series |
 | `OMV_SEED_DEV_CLIENT` | off | `1` seeds the `aadi-dev` client — dev only |
@@ -255,7 +258,8 @@ Every catalog view, FHIR read, first playback, and export (including denials) ap
 ### 10.3 Health & troubleshooting
 
 - `GET /healthz` on the API returns `ok`.
-- **Study never appears in the catalog:** check the study became *stable* in Orthanc (all instances arrived), then the worker logs — failed conversions mark the study `failed` and emit a `study.failed` webhook.
+- **Study never appears in the catalog:** check the study became *stable* in Orthanc (all instances arrived), then the worker logs.
+- **Study stuck in `retrying` or gone to `failed`:** transient failures retry automatically — the job is reclaimed after `OMV_RETRY_IDLE_SECS`, with the attempt number taken from the Redis Stream's delivery counter. After `OMV_MAX_ATTEMPTS` the job lands on the `omv:dead` Redis stream with its final error, attempt count, and timestamp, the study goes to `failed`, and the `study.failed` webhook fires. Inspect dead letters with `redis-cli XRANGE omv:dead - +`. To re-drive after fixing the cause, re-POST the idempotent Orthanc event: `curl -X POST .../internal/orthanc-event -d '{"study_id": "<orthanc id>"}'`. Unparseable job payloads dead-letter immediately.
 - **401/403 from `/v1/...`:** access token expired (re-exchange), or the client lacks the required scope.
 - **Player loads but video won't start:** the playback token likely expired (~5 min) — re-fetch the study for fresh URLs. Tampered or expired tokens are rejected at the streaming path.
 - **502s from nginx after recreating the api container:** nginx caches upstream DNS; restart or reload nginx.
