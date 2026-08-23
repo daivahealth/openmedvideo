@@ -69,20 +69,83 @@ pub struct WindowPreset {
     pub center_width: Option<(i32, i32)>,
 }
 
-/// Phase 1: hardcoded presets per modality (body-part-driven selection is
-/// Phase 2). Cine modalities keep their native rendering; CT gets the three
-/// standard chest/general windows.
-pub fn presets_for(modality: &str) -> &'static [WindowPreset] {
+/// Window presets for a series (design §4.2): cine modalities keep their
+/// native rendering; CT selects a clinically appropriate window set from
+/// the BodyPartExamined tag, falling back to a general set when the tag is
+/// missing or unrecognized.
+pub fn presets_for(modality: &str, body_part: Option<&str>) -> &'static [WindowPreset] {
     const DEFAULT: &[WindowPreset] =
         &[WindowPreset { key: "default", label: "Default", center_width: None }];
-    const CT: &[WindowPreset] = &[
+    match modality {
+        "CT" => ct_presets_for_body_part(body_part.unwrap_or("")),
+        _ => DEFAULT,
+    }
+}
+
+/// CT window sets by body part. Matching is contains-based over the
+/// uppercased tag because BodyPartExamined arrives as DICOM defined terms
+/// (CHEST, HEAD, CSPINE, ...) but also as free-ish text from some consoles.
+pub fn ct_presets_for_body_part(body_part: &str) -> &'static [WindowPreset] {
+    const HEAD: &[WindowPreset] = &[
+        WindowPreset { key: "brain", label: "Brain", center_width: Some((40, 80)) },
+        WindowPreset { key: "subdural", label: "Subdural", center_width: Some((75, 215)) },
+        WindowPreset { key: "bone", label: "Bone", center_width: Some((600, 2800)) },
+    ];
+    const CHEST: &[WindowPreset] = &[
+        WindowPreset { key: "lung", label: "Lung", center_width: Some((-600, 1500)) },
+        WindowPreset { key: "mediastinal", label: "Mediastinal", center_width: Some((50, 350)) },
+        WindowPreset { key: "bone", label: "Bone", center_width: Some((300, 1500)) },
+    ];
+    const ABDOMEN: &[WindowPreset] = &[
+        WindowPreset { key: "soft", label: "Soft tissue", center_width: Some((40, 400)) },
+        WindowPreset { key: "bone", label: "Bone", center_width: Some((300, 1500)) },
+    ];
+    const SPINE_NECK: &[WindowPreset] = &[
+        WindowPreset { key: "soft", label: "Soft tissue", center_width: Some((50, 350)) },
+        WindowPreset { key: "bone", label: "Bone", center_width: Some((600, 2800)) },
+    ];
+    const GENERAL: &[WindowPreset] = &[
         WindowPreset { key: "soft", label: "Soft tissue", center_width: Some((40, 400)) },
         WindowPreset { key: "lung", label: "Lung", center_width: Some((-600, 1500)) },
         WindowPreset { key: "bone", label: "Bone", center_width: Some((300, 1500)) },
     ];
-    match modality {
-        "CT" => CT,
-        _ => DEFAULT,
+
+    let bp = body_part.trim().to_uppercase();
+    let has = |terms: &[&str]| terms.iter().any(|t| bp.contains(t));
+    if has(&["HEAD", "BRAIN", "SKULL"]) {
+        HEAD
+    } else if has(&["CHEST", "LUNG", "THORAX"]) {
+        CHEST
+    } else if has(&["ABDOMEN", "PELVIS", "LIVER", "KIDNEY"]) {
+        ABDOMEN
+    } else if has(&["SPINE", "NECK"]) {
+        SPINE_NECK
+    } else {
+        GENERAL
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys(presets: &[WindowPreset]) -> Vec<&'static str> {
+        presets.iter().map(|p| p.key).collect()
+    }
+
+    #[test]
+    fn ct_presets_follow_body_part() {
+        assert_eq!(keys(presets_for("CT", Some("HEAD"))), ["brain", "subdural", "bone"]);
+        assert_eq!(keys(presets_for("CT", Some("CHEST"))), ["lung", "mediastinal", "bone"]);
+        assert_eq!(keys(presets_for("CT", Some("ABDOMEN"))), ["soft", "bone"]);
+        assert_eq!(keys(presets_for("CT", Some("CSPINE"))), ["soft", "bone"]);
+        // Free-text and case variants from real consoles.
+        assert_eq!(keys(presets_for("CT", Some("Head Brain"))), ["brain", "subdural", "bone"]);
+        // Missing or unknown tag falls back to the general set.
+        assert_eq!(keys(presets_for("CT", None)), ["soft", "lung", "bone"]);
+        assert_eq!(keys(presets_for("CT", Some("EXTREMITY"))), ["soft", "lung", "bone"]);
+        // Non-CT modalities are untouched by body part.
+        assert_eq!(keys(presets_for("US", Some("HEAD"))), ["default"]);
     }
 }
 

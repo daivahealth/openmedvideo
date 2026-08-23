@@ -246,6 +246,7 @@ impl Worker {
             .to_string();
         let series_description =
             tags["SeriesDescription"].as_str().unwrap_or("").to_string();
+        let body_part = tags["BodyPartExamined"].as_str().unwrap_or("");
 
         if matches!(modality.as_str(), "CR" | "DX" | "MG" | "PR" | "SR" | "KO") {
             info!(series = %series_uid, %modality, "non-video modality, skipping");
@@ -266,8 +267,15 @@ impl Worker {
             models::stack_fps(&modality)
         };
 
+        let presets = models::presets_for(&modality, Some(body_part));
+        info!(
+            series = %series_uid, %modality, body_part,
+            presets = ?presets.iter().map(|p| p.key).collect::<Vec<_>>(),
+            "window presets selected"
+        );
+
         let mut renditions = Vec::new();
-        for preset in models::presets_for(&modality) {
+        for preset in presets {
             let dir = tempfile::tempdir().context("tempdir")?;
             let mut enc = encode::HlsEncoder::start(dir.path(), fps, !cine, self.encoder)?;
             for (instance_id, frame) in &frames {
