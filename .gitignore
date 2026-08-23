@@ -2,3 +2,7 @@
 **/*.rs.bk
 .env
 .DS_Store
+node_modules/
+packages/*/dist/
+examples/react-demo/bundle.js
+examples/react-demo/package-lock.json

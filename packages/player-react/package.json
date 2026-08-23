@@ -1,0 +1,20 @@
+{
+  "name": "@openmedvideo/player-react",
+  "version": "0.1.0",
+  "description": "React wrapper for the <omv-player> clinical imaging player",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc"
+  },
+  "peerDependencies": {
+    "react": ">=17"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "typescript": "^5"
+  }
+}

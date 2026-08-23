@@ -1,0 +1,21 @@
+{
+  "name": "@openmedvideo/player-angular",
+  "version": "0.1.0",
+  "description": "Angular wrapper for the <omv-player> clinical imaging player",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc"
+  },
+  "peerDependencies": {
+    "@angular/core": ">=16"
+  },
+  "devDependencies": {
+    "@angular/core": "^19",
+    "rxjs": "^7",
+    "typescript": "^5"
+  }
+}

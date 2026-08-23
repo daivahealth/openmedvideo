@@ -1,0 +1,16 @@
+{
+  "name": "omv-react-demo",
+  "private": true,
+  "description": "Demo app for @openmedvideo/player-react. npm install && npm run build, then serve this directory and open index.html?server=...&study=...&token=...",
+  "scripts": {
+    "build": "esbuild app.jsx --bundle --jsx=automatic --alias:react=./node_modules/react --alias:react-dom=./node_modules/react-dom --outfile=bundle.js"
+  },
+  "dependencies": {
+    "@openmedvideo/player-react": "file:../../packages/player-react",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25"
+  }
+}

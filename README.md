@@ -90,6 +90,21 @@ one element:
   (access control is the playback token, not the Origin header).
 - Runnable example: [examples/embed-demo.html](examples/embed-demo.html).
 
+For teams that prefer idiomatic bindings over the raw element, thin typed
+wrappers live in `packages/` (same one codebase underneath — the packages are
+~100 lines each and load the component script from your OMV server):
+
+- **React**: `@openmedvideo/player-react` — `<OmvPlayer server studyId token
+  onReady onError onFrame ref>` with `ref.step(±1)` / `ref.gotoFrame(n)`;
+  runnable demo in [examples/react-demo](examples/react-demo).
+- **Angular**: `@openmedvideo/player-angular` — standalone
+  `<omv-player-ng [server] [studyId] [token] (ready) (error) (frame)>`
+  component; consumers never need `CUSTOM_ELEMENTS_SCHEMA`, and events
+  re-enter Angular's zone for change detection.
+
+Both are installable via `file:`/git today; npm publishing is a release-time
+decision.
+
 ## Phase 1 design shortcuts (deliberate)
 
 - **Orthanc renders the frames** (`/instances/…/rendered`): it applies the
