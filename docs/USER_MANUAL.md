@@ -246,6 +246,7 @@ Defaults live in `crates/omv-core/src/config.rs`; the full working set is in [de
 | `OMV_ENCODER` | `auto` | `auto` / `nvenc` / `x264` (worker) |
 | `OMV_RETRY_IDLE_SECS` | `60` | Idle time before a failed job is reclaimed for retry (dev compose uses 15) (worker) |
 | `OMV_MAX_ATTEMPTS` | `4` | Conversion attempts before a job is dead-lettered (worker) |
+| `OMV_METRICS_ADDR` | `0.0.0.0:9464` | Prometheus `/metrics` bind (api and worker) — internal only, never expose through the edge (see the [Deployment Guide](DEPLOYMENT.md) §10) |
 | `OMV_PHI_RULES` | — | Path to the PHI crop/mask rules JSON (worker) |
 | `OMV_PHI_UNMATCHED_BURNEDIN` | warn | `skip` refuses unmatched `BurnedInAnnotation=YES` series |
 | `OMV_SEED_DEV_CLIENT` | off | `1` seeds the `aadi-dev` client — dev only |
@@ -257,7 +258,7 @@ Every catalog view, FHIR read, first playback, and export (including denials) ap
 
 ### 10.3 Health & troubleshooting
 
-- `GET /healthz` on the API returns `ok`.
+- `GET /healthz` on the API returns `ok`. For queue depth, conversion latency, dead-letter arrivals, and playback error rate, use the Prometheus metrics — see the [Deployment Guide](DEPLOYMENT.md) §10 for the endpoints and per-SLI queries.
 - **Study never appears in the catalog:** check the study became *stable* in Orthanc (all instances arrived), then the worker logs.
 - **Study stuck in `retrying` or gone to `failed`:** transient failures retry automatically — the job is reclaimed after `OMV_RETRY_IDLE_SECS`, with the attempt number taken from the Redis Stream's delivery counter. After `OMV_MAX_ATTEMPTS` the job lands on the `omv:dead` Redis stream with its final error, attempt count, and timestamp, the study goes to `failed`, and the `study.failed` webhook fires. Inspect dead letters with `redis-cli XRANGE omv:dead - +`. To re-drive after fixing the cause, re-POST the idempotent Orthanc event: `curl -X POST .../internal/orthanc-event -d '{"study_id": "<orthanc id>"}'`. Unparseable job payloads dead-letter immediately.
 - **401/403 from `/v1/...`:** access token expired (re-exchange), or the client lacks the required scope.
