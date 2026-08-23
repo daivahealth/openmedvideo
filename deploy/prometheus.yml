@@ -1,7 +1,7 @@
 # Dev-stack Prometheus. Key queries against these targets:
 #   queue depth:        omv_queue_depth / omv_queue_pending
 #   conversion p95:     histogram_quantile(0.95, rate(omv_conversion_seconds_bucket[5m]))
-#   60s SLO compliance: sum(rate(omv_job_total_seconds_bucket{le="60"}[1h]))
+#   60s SLO compliance: sum(rate(omv_job_total_seconds_bucket{le="60.0"}[1h]))
 #                         / sum(rate(omv_job_total_seconds_count[1h]))
 #   playback error rate: 1 - rate(omv_playback_requests_total{outcome="ok"}[5m])
 #                          / rate(omv_playback_requests_total[5m])

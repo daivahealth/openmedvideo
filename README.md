@@ -146,11 +146,15 @@ FHIR reads are audited like catalog views.
 
 **Monitoring:** both services expose Prometheus metrics on internal port
 9464 (never proxied by nginx); the dev stack runs Prometheus at
-http://localhost:9090 scraping both. The SLIs from the design:
+http://localhost:9090 scraping both, and **Grafana at http://localhost:3000**
+(admin/admin; anonymous viewers allowed in dev) with a provisioned
+"OpenMedVideo Overview" dashboard: the four SLI stats with semantic
+thresholds, plus queue, conversion-outcome, duration-quantile, playback,
+per-route API, and webhook panels. The SLIs from the design:
 - queue: `omv_queue_depth`, `omv_queue_pending`
 - conversion p95: `histogram_quantile(0.95, rate(omv_conversion_seconds_bucket[5m]))`
 - 60 s SLO (enqueue→outcome incl. queue wait and retries):
-  `sum(rate(omv_job_total_seconds_bucket{le="60"}[1h])) / sum(rate(omv_job_total_seconds_count[1h]))`
+  `sum(rate(omv_job_total_seconds_bucket{le="60.0"}[1h])) / sum(rate(omv_job_total_seconds_count[1h]))`
 - playback error rate: `1 - rate(omv_playback_requests_total{outcome="ok"}[5m]) / rate(omv_playback_requests_total[5m])`
 
 Plus `omv_conversions_total{outcome}`, `omv_webhook_deliveries_total{outcome}`,
