@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v1.6 — Phases 1–2 engineering built and verified, incl. FHIR, body-part presets, PHI framework, dead-letter queue, and metrics; see §9 |
+| Status | v1.7 — Phases 1–2 engineering built and verified, incl. FHIR, body-part presets, PHI framework, dead-letter queue, metrics, and dashboards; see §9 |
 | Date | 2026-08-24 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
@@ -347,15 +347,23 @@ Built and verified:
   Verified E2E: real traffic produced correct counters/histograms on both
   services, Prometheus reported both targets up and answered the quantile
   and gauge queries. The PromQL for each SLI is documented in
-  `deploy/prometheus.yml`.
+  `deploy/prometheus.yml`. A provisioned **Grafana dashboard** ("OpenMedVideo
+  Overview", declarative — datasource, folder, and dashboard come up with the
+  compose stack) renders the four SLI stats with good/warn/critical
+  thresholds plus queue, outcome, quantile, playback, per-route API, and
+  webhook panels; verified live, including the error-rate tile turning red
+  under deliberate bad-token traffic. Caveat discovered: Prometheus 3
+  normalizes histogram `le` labels to float form (`le="60.0"`), so SLO
+  queries must match that, not the exporter's `le="60"`.
 
 Open (operational, mostly needing real data/infra):
 - PHI rule *content* for real NH machines (the framework, policy, and
   logging are built — see above): per-model mask/crop rectangles added to
   the mounted rules file as modalities are observed.
 - AADI's real IdP registered in the client registry; AADI player integration.
-- SLO *measurement* on production hardware (the metrics exist — see above):
-  real volumes, GPU throughput, alert thresholds, and dashboards.
+- SLO *measurement* on production hardware (the metrics and dashboards
+  exist — see above): real volumes, GPU throughput, and alert thresholds
+  tuned on real traffic.
 - Regression corpus from real-world DICOM failures.
 
 ### Phase 3 — Scale-out (not started)
