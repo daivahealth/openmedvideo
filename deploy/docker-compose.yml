@@ -94,6 +94,16 @@ services:
     depends_on: [postgres, redis, minio-init, orthanc, api]
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    ports:
+      - "9090:9090"   # Prometheus UI (dev only)
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on: [api, worker]
+    restart: unless-stopped
+
   nginx:
     image: nginx:alpine
     ports:

@@ -25,6 +25,7 @@ use tracing::{error, info};
 
 mod auth;
 mod fhir;
+mod metrics;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -77,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/player/{token}/{study_uid}", get(player_page))
         .route("/player-assets/hls.min.js", get(hls_js))
         .route("/player-assets/omv-player.js", get(omv_player_js))
+        .layer(axum::middleware::from_fn(metrics::track))
         .layer(TraceLayer::new_for_http())
         // Cross-origin embeds of <omv-player> need to fetch /stream and
         // /player-assets from other origins. Access control is the playback
@@ -84,6 +86,14 @@ async fn main() -> anyhow::Result<()> {
         // does not widen access.
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
+
+    let metrics_addr =
+        std::env::var("OMV_METRICS_ADDR").unwrap_or_else(|_| "0.0.0.0:9464".into());
+    tokio::spawn(async move {
+        if let Err(e) = metrics::serve(&metrics_addr).await {
+            error!(error = %e, "metrics server exited");
+        }
+    });
 
     info!(addr = %state.cfg.bind_addr, "omv-api listening");
     let listener = tokio::net::TcpListener::bind(&state.cfg.bind_addr).await?;
@@ -363,11 +373,24 @@ async fn stream_object(
     Path((tok, key)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let claims = token::verify(&tok, &st.cfg.token_secret, Utc::now().timestamp())
-        .map_err(|_| ApiError::Unauthorized)?;
-    if !key.starts_with(&claims.prefix) || key.contains("..") {
-        return Err(ApiError::Unauthorized);
+        .map_err(|_| ApiError::Unauthorized);
+    match claims {
+        Ok(c) if key.starts_with(&c.prefix) && !key.contains("..") => {}
+        _ => {
+            metrics::PLAYBACK.with_label_values(&["unauthorized"]).inc();
+            return Err(ApiError::Unauthorized);
+        }
     }
-    let body = st.store.get(&key).await.map_err(|_| ApiError::NotFound)?;
+    let body = match st.store.get(&key).await {
+        Ok(b) => {
+            metrics::PLAYBACK.with_label_values(&["ok"]).inc();
+            b
+        }
+        Err(_) => {
+            metrics::PLAYBACK.with_label_values(&["not_found"]).inc();
+            return Err(ApiError::NotFound);
+        }
+    };
     Ok((
         [
             (header::CONTENT_TYPE, storage::content_type_for(&key)),

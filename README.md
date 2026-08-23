@@ -140,6 +140,19 @@ with DICOM modality codings and a contained `Endpoint` (connection type
 the token is short-lived, so integrations re-read the resource to refresh it.
 FHIR reads are audited like catalog views.
 
+**Monitoring:** both services expose Prometheus metrics on internal port
+9464 (never proxied by nginx); the dev stack runs Prometheus at
+http://localhost:9090 scraping both. The SLIs from the design:
+- queue: `omv_queue_depth`, `omv_queue_pending`
+- conversion p95: `histogram_quantile(0.95, rate(omv_conversion_seconds_bucket[5m]))`
+- 60 s SLO (enqueue→outcome incl. queue wait and retries):
+  `sum(rate(omv_job_total_seconds_bucket{le="60"}[1h])) / sum(rate(omv_job_total_seconds_count[1h]))`
+- playback error rate: `1 - rate(omv_playback_requests_total{outcome="ok"}[5m]) / rate(omv_playback_requests_total[5m])`
+
+Plus `omv_conversions_total{outcome}`, `omv_webhook_deliveries_total{outcome}`,
+and per-route `omv_http_requests_total` / `omv_http_request_seconds` (labeled
+by matched route template, so UIDs never explode cardinality).
+
 **Retries and the dead-letter queue:** a failed conversion is not acked — the
 job stays pending and is reclaimed after `OMV_RETRY_IDLE_SECS` (default 60;
 the dev compose uses 15) with the Redis Stream's delivery counter as the

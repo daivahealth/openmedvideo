@@ -20,3 +20,6 @@ tempfile.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true
+axum.workspace = true
+prometheus.workspace = true
+once_cell.workspace = true

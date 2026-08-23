@@ -5,6 +5,7 @@
 //! registers renditions in the catalog. Stateless: run as many as needed.
 
 mod encode;
+mod metrics;
 mod notify;
 mod orthanc;
 mod phi;
@@ -83,6 +84,14 @@ async fn main() -> Result<()> {
         }
     }
 
+    let metrics_addr =
+        std::env::var("OMV_METRICS_ADDR").unwrap_or_else(|_| "0.0.0.0:9464".into());
+    tokio::spawn(async move {
+        if let Err(e) = metrics::serve(&metrics_addr).await {
+            error!(error = %e, "metrics server exited");
+        }
+    });
+
     let consumer = format!("worker-{}", std::process::id());
     let read_opts = StreamReadOptions::default()
         .group(config::JOB_GROUP, &consumer)
@@ -97,6 +106,7 @@ async fn main() -> Result<()> {
         if let Err(e) = worker.handle_retries(&mut conn, &consumer).await {
             warn!(error = %e, "retry pass failed");
         }
+        worker.update_queue_gauges(&mut conn).await;
 
         let reply: StreamReadReply = match conn
             .xread_options(&[config::JOB_STREAM], &[">"], &read_opts)
@@ -143,12 +153,22 @@ impl Worker {
         };
 
         info!(study = %job.orthanc_study_id, attempt, max = self.max_attempts, "converting");
+        let started = std::time::Instant::now();
         match self.process_study(&job.orthanc_study_id).await {
             Ok(()) => {
+                metrics::CONVERSIONS.with_label_values(&["success"]).inc();
+                metrics::CONVERSION_SECONDS.observe(started.elapsed().as_secs_f64());
+                if let Some(age) = metrics::age_of_entry(&entry.id) {
+                    metrics::JOB_TOTAL_SECONDS.observe(age);
+                }
                 let _: redis::RedisResult<i64> =
                     conn.xack(config::JOB_STREAM, config::JOB_GROUP, &[&entry.id]).await;
             }
             Err(e) if attempt >= self.max_attempts => {
+                metrics::CONVERSIONS.with_label_values(&["dead_letter"]).inc();
+                if let Some(age) = metrics::age_of_entry(&entry.id) {
+                    metrics::JOB_TOTAL_SECONDS.observe(age);
+                }
                 error!(study = %job.orthanc_study_id, attempt, error = ?e,
                        "conversion failed permanently, dead-lettering");
                 self.mark_status(&job.orthanc_study_id, "failed", &format!("{e:#}")).await;
@@ -162,6 +182,7 @@ impl Worker {
                     .await;
             }
             Err(e) => {
+                metrics::CONVERSIONS.with_label_values(&["retry"]).inc();
                 warn!(study = %job.orthanc_study_id, attempt, error = ?e,
                       "conversion failed, will retry after backoff");
                 self.mark_status(&job.orthanc_study_id, "retrying", &format!("{e:#}")).await;
@@ -227,6 +248,29 @@ impl Worker {
         }
         let _: redis::RedisResult<i64> =
             conn.xack(config::JOB_STREAM, config::JOB_GROUP, &[entry_id]).await;
+    }
+
+    /// Refreshes the queue gauges (stream length and delivered-but-unacked
+    /// count); runs once per main-loop iteration, i.e. at least every 5 s.
+    async fn update_queue_gauges(&self, conn: &mut redis::aio::MultiplexedConnection) {
+        if let Ok(len) = redis::cmd("XLEN")
+            .arg(config::JOB_STREAM)
+            .query_async::<i64>(conn)
+            .await
+        {
+            metrics::QUEUE_DEPTH.set(len);
+        }
+        // XPENDING summary reply: [count, min-id, max-id, consumers].
+        if let Ok(redis::Value::Array(items)) = redis::cmd("XPENDING")
+            .arg(config::JOB_STREAM)
+            .arg(config::JOB_GROUP)
+            .query_async::<redis::Value>(conn)
+            .await
+        {
+            if let Some(redis::Value::Int(count)) = items.first() {
+                metrics::QUEUE_PENDING.set(*count);
+            }
+        }
     }
 
     async fn mark_status(&self, orthanc_id: &str, status: &str, err: &str) {

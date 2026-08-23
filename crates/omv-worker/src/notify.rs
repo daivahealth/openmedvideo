@@ -86,6 +86,7 @@ impl Notifier {
                 .await;
             match res {
                 Ok(r) if r.status().is_success() => {
+                    crate::metrics::WEBHOOKS.with_label_values(&["delivered"]).inc();
                     info!(client = client_id, event, "webhook delivered");
                     return;
                 }
@@ -94,6 +95,7 @@ impl Notifier {
             }
             tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
         }
+        crate::metrics::WEBHOOKS.with_label_values(&["gave_up"]).inc();
         warn!(client = client_id, event, "webhook delivery gave up after {ATTEMPTS} attempts");
     }
 }
