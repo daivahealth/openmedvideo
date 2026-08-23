@@ -9,6 +9,8 @@
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
 
+Companion docs: the [User Manual](USER_MANUAL.md) (using a running deployment: auth, catalog, playback, export, webhooks, FHIR, PHI rules) and the [Deployment Guide](DEPLOYMENT.md) (standing up and hardening a deployment: compose stack, GPU, secrets, backup, upgrades, monitoring).
+
 ---
 
 ## 1. Purpose and scope
