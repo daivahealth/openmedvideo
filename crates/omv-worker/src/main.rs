@@ -7,6 +7,7 @@
 mod encode;
 mod notify;
 mod orthanc;
+mod phi;
 mod sorting;
 
 use anyhow::{Context, Result};
@@ -30,6 +31,10 @@ struct Worker {
     orthanc: Orthanc,
     encoder: encode::Encoder,
     notifier: notify::Notifier,
+    phi_rules: Vec<phi::Rule>,
+    /// OMV_PHI_UNMATCHED_BURNEDIN=skip: refuse to convert a series whose
+    /// BurnedInAnnotation tag says YES when no strip rule matches it.
+    phi_skip_unmatched: bool,
 }
 
 #[tokio::main]
@@ -49,6 +54,9 @@ async fn main() -> Result<()> {
         orthanc: Orthanc::new(&cfg.orthanc_url, &cfg.orthanc_user, &cfg.orthanc_password),
         encoder: encode::detect_encoder(&encoder_pref).await?,
         notifier: notify::Notifier::default(),
+        phi_rules: phi::load(std::env::var("OMV_PHI_RULES").ok().as_deref())?,
+        phi_skip_unmatched: std::env::var("OMV_PHI_UNMATCHED_BURNEDIN").as_deref()
+            == Ok("skip"),
         cfg,
     };
 
@@ -267,6 +275,44 @@ impl Worker {
             models::stack_fps(&modality)
         };
 
+        // PHI stripping (design §7.2): match per-model crop/mask rules on
+        // modality + manufacturer + model from the first instance's tags.
+        let inst_tags = self
+            .orthanc
+            .get_json(&format!("/instances/{}/simplified-tags", frames[0].0))
+            .await
+            .unwrap_or_default();
+        let manufacturer = tags["Manufacturer"]
+            .as_str()
+            .or_else(|| inst_tags["Manufacturer"].as_str())
+            .unwrap_or("");
+        let model = inst_tags["ManufacturerModelName"].as_str().unwrap_or("");
+        let burned_in = inst_tags["BurnedInAnnotation"]
+            .as_str()
+            .map(|s| s.trim().eq_ignore_ascii_case("YES"))
+            .unwrap_or(false);
+
+        let action = phi::find(&self.phi_rules, &modality, manufacturer, model);
+        let phi_filter = action.and_then(phi::to_filter);
+        match (&phi_filter, burned_in) {
+            (Some(f), _) => {
+                info!(series = %series_uid, manufacturer, model, filter = %f,
+                      "PHI-strip rule applied");
+            }
+            (None, true) if self.phi_skip_unmatched => {
+                warn!(series = %series_uid, manufacturer, model,
+                      "BurnedInAnnotation=YES with no matching PHI rule; \
+                       series skipped (OMV_PHI_UNMATCHED_BURNEDIN=skip)");
+                return Ok(None);
+            }
+            (None, true) => {
+                warn!(series = %series_uid, manufacturer, model,
+                      "BurnedInAnnotation=YES with no matching PHI rule; \
+                       converting anyway — add a rule for this machine");
+            }
+            (None, false) => {}
+        }
+
         let presets = models::presets_for(&modality, Some(body_part));
         info!(
             series = %series_uid, %modality, body_part,
@@ -277,7 +323,9 @@ impl Worker {
         let mut renditions = Vec::new();
         for preset in presets {
             let dir = tempfile::tempdir().context("tempdir")?;
-            let mut enc = encode::HlsEncoder::start(dir.path(), fps, !cine, self.encoder)?;
+            let mut enc = encode::HlsEncoder::start(
+                dir.path(), fps, !cine, self.encoder, phi_filter.as_deref(),
+            )?;
             for (instance_id, frame) in &frames {
                 let png = self
                     .orthanc
@@ -289,24 +337,19 @@ impl Worker {
             // export.mp4 lands in the same dir and uploads with the segments.
             encode::mux_export(dir.path(), self.encoder).await?;
 
-            let prefix = format!("studies/{study_uid}/{series_uid}/{}", preset.key);
-            self.upload_dir(dir.path(), &prefix).await?;
-
-            // Poster: middle frame of the first rendered series, as JPEG.
+            // Poster: middle frame of the ENCODED video, so it inherits the
+            // PHI stripping and windowing — never straight from the source.
             if !*poster_done {
-                let (mid_instance, mid_frame) = &frames[frames.len() / 2];
-                let jpg = self
-                    .orthanc
-                    .get_bytes(
-                        &format!("/instances/{mid_instance}/frames/{mid_frame}/rendered"),
-                        "image/jpeg",
-                    )
-                    .await?;
+                let mid_secs = (frames.len() / 2) as f64 / fps;
+                let jpg = encode::extract_poster(dir.path(), mid_secs).await?;
                 self.store
                     .put(&format!("studies/{study_uid}/poster.jpg"), jpg)
                     .await?;
                 *poster_done = true;
             }
+
+            let prefix = format!("studies/{study_uid}/{series_uid}/{}", preset.key);
+            self.upload_dir(dir.path(), &prefix).await?;
 
             renditions.push(Rendition {
                 series_uid: series_uid.clone(),

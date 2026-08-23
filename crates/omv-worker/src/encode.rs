@@ -101,10 +101,22 @@ impl HlsEncoder {
     /// `all_intra` is used for CT/MRI stacks (design D6): every frame is a
     /// keyframe so players can frame-step and seek instantly. Cine content
     /// uses a ~1s GOP instead.
-    pub fn start(out_dir: &Path, fps: f64, all_intra: bool, encoder: Encoder) -> Result<Self> {
+    pub fn start(
+        out_dir: &Path,
+        fps: f64,
+        all_intra: bool,
+        encoder: Encoder,
+        phi_filter: Option<&str>,
+    ) -> Result<Self> {
         let gop = if all_intra { 1 } else { fps.round().max(1.0) as i64 };
         let seg = out_dir.join("seg_%05d.m4s");
         let playlist = out_dir.join("index.m3u8");
+        // PHI masks/crops (design §7.2) run BEFORE anything else so stripped
+        // regions never reach the encoder in any form.
+        let vf = match phi_filter {
+            Some(f) => format!("{f},scale=trunc(iw/2)*2:trunc(ih/2)*2"),
+            None => "scale=trunc(iw/2)*2:trunc(ih/2)*2".to_string(),
+        };
 
         let mut child = Command::new("ffmpeg")
             .args(["-y", "-hide_banner", "-loglevel", "error"])
@@ -115,7 +127,7 @@ impl HlsEncoder {
             .args(encoder.quality_args(18))
             .args(["-pix_fmt", "yuv420p"])
             // yuv420p requires even dimensions; some detectors/US crops are odd.
-            .args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"])
+            .args(["-vf", &vf])
             .args(["-g", &gop.to_string(), "-keyint_min", &gop.to_string()])
             .args(["-sc_threshold", "0"])
             .args(["-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod"])
@@ -199,6 +211,33 @@ pub async fn mux_export(out_dir: &Path, encoder: Encoder) -> Result<std::path::P
         run(args).await?;
     }
     Ok(export)
+}
+
+/// Extracts a poster JPEG from the already-encoded output (never from the
+/// raw source): the poster must inherit the PHI stripping and windowing that
+/// went into the video (design §7.2). Reads export.mp4 rather than the HLS
+/// playlist — seeking a local fMP4 playlist silently produces no frame
+/// (ffmpeg exits 0 with a "partial file" warning), while the faststart MP4
+/// seeks reliably. Requires mux_export() to have run first.
+pub async fn extract_poster(out_dir: &Path, at_secs: f64) -> Result<Vec<u8>> {
+    let source = out_dir.join("export.mp4");
+    let poster = out_dir.join("__poster.jpg");
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-loglevel", "error"])
+        .args(["-ss", &format!("{at_secs:.3}")])
+        .args(["-i", source.to_str().context("export path")?])
+        .args(["-frames:v", "1", "-q:v", "3"])
+        .arg(poster.to_str().context("poster path")?)
+        .status()
+        .await
+        .context("spawning ffmpeg for poster")?;
+    if !status.success() {
+        bail!("ffmpeg poster extraction exited with {status}");
+    }
+    let bytes = std::fs::read(&poster)
+        .context("poster frame not produced (seek past end of video?)")?;
+    std::fs::remove_file(&poster).ok(); // keep it out of the rendition upload
+    Ok(bytes)
 }
 
 #[cfg(test)]

@@ -118,6 +118,19 @@ exceeds the WhatsApp-safe ~14 MB), downloadable via each rendition's
 (denials too), and can be disabled deployment-wide with
 `OMV_EXPORT_ENABLED=0`.
 
+**PHI stripping:** DICOM overlay planes never reach the video (Orthanc's
+renderer draws pixel data only). PHI *burned into the pixels* — ultrasound
+demographic banners, console annotations — is removed by per-model crop/mask
+rules in [deploy/phi-rules.json](deploy/phi-rules.json) (`OMV_PHI_RULES`),
+matched case-insensitively on modality/Manufacturer/ManufacturerModelName;
+first match wins, so machine-specific rules go above generic ones. A
+conservative default masks the top 48 px of every US series. Filters run
+before encoding, and the poster is extracted from the *encoded* video so it
+inherits the stripping. A series with `BurnedInAnnotation=YES` and no
+matching rule converts with a loud warning by default, or is skipped
+entirely with `OMV_PHI_UNMATCHED_BURNEDIN=skip`. Refine the rules as real
+modalities are observed — adding one is a config edit, not a release.
+
 **FHIR R4 exposure:** studies are also discoverable in healthcare-standard
 vocabulary (same OAuth bearer, `imaging.read` scope): `GET /fhir/metadata`
 (CapabilityStatement), `GET /fhir/ImagingStudy` (searchset Bundle of ready

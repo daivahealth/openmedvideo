@@ -84,7 +84,11 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       target: worker
-    environment: *omv-env
+    environment:
+      <<: *omv-env
+      OMV_PHI_RULES: /etc/omv/phi-rules.json
+    volumes:
+      - ./phi-rules.json:/etc/omv/phi-rules.json:ro
     depends_on: [postgres, redis, minio-init, orthanc, api]
     restart: unless-stopped
 

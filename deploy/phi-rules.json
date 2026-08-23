@@ -1,0 +1,7 @@
+[
+  {
+    "_comment": "Conservative default: ultrasound consoles burn the patient banner into the top band. Refine per machine model as real NH modalities are observed; the FIRST matching rule wins, so put machine-specific rules above this one.",
+    "match": { "modality": "US" },
+    "action": { "mask": [ { "x": 0, "y": 0, "w": 10000, "h": 48 } ] }
+  }
+]
