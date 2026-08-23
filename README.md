@@ -8,7 +8,11 @@ imaging on any phone with play/pause/scrub, no DICOM viewer required.
 > communication; the diagnostic read happens on the DICOM in PACS.
 > Videos are a regenerable cache — PACS remains the source of truth.
 
-Full architecture and rationale: [docs/DESIGN.md](docs/DESIGN.md).
+Documentation:
+
+- [docs/DESIGN.md](docs/DESIGN.md) — full architecture and rationale
+- [docs/USER_MANUAL.md](docs/USER_MANUAL.md) — using a running deployment: auth, catalog, playback, export, webhooks, FHIR, PHI rules
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — standing up and hardening a deployment: compose stack, GPU, secrets, backup, upgrades
 
 ## Layout
 
