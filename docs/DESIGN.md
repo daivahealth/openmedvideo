@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| Status | v1.1 — Phases 1–2 engineering built and verified; see §9 |
-| Date | 2026-08-22 (v1.0: 2026-08-21) |
+| Status | v1.2 — Phases 1–2 engineering built and verified; integration contract (§5.3) fully implemented incl. FHIR; see §9 |
+| Date | 2026-08-23 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
 
@@ -299,6 +299,17 @@ Built and verified:
   actual GPU hardware.
 - **Signed webhooks**: `study.ready`/`study.failed` HMAC-signed per client,
   bounded retries, verified receiver-side.
+- **FHIR R4 exposure** (pulled forward from Phase 3, 2026-08-23): a
+  CapabilityStatement at `/fhir/metadata`, `ImagingStudy` search (searchset
+  Bundle, DICOM modality codings, `urn:oid:` identifiers) and read — the full
+  resource's series reference a contained `Endpoint` (connectionType `hls`)
+  whose address is a fresh short-lived tokenized URL to the study's
+  `manifest.json`; integrations re-read the resource to refresh the token.
+  Same OAuth bearer and `imaging.read` scope; reads audited. Verified E2E
+  from FHIR search to a playing manifest without touching the proprietary
+  catalog API. With this, **all five integration surfaces of §5.3 are
+  implemented**: client registry + OAuth, versioned REST catalog, standard
+  HLS playback + both player tiers, signed webhooks, and FHIR.
 
 Open (operational, mostly needing real data/infra):
 - PHI-strip rules per modality model and burned-in-annotation handling —
@@ -311,7 +322,7 @@ Open (operational, mostly needing real data/infra):
 
 ### Phase 3 — Scale-out (not started)
 
-Multi-hospital ingest, second and third client apps onboarded via the registry (nurse app, web portal), FHIR `ImagingStudy`/`Endpoint` exposure, regional edge caches/CDN, coronal/sagittal reformats for CT, storage lifecycle + regenerate-on-demand, capacity planning from measured volumes.
+Multi-hospital ingest, second and third client apps onboarded via the registry (nurse app, web portal), regional edge caches/CDN, coronal/sagittal reformats for CT, storage lifecycle + regenerate-on-demand, capacity planning from measured volumes. (FHIR `ImagingStudy`/`Endpoint` exposure was originally scoped here; it was pulled forward and shipped with Phase 2 — see above.)
 
 ### Open questions (needed to size Phase 2)
 
