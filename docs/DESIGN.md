@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v1.5 — Phases 1–2 engineering built and verified, incl. FHIR, body-part presets, PHI-strip framework, and the dead-letter retry queue; see §9 |
+| Status | v1.6 — Phases 1–2 engineering built and verified, incl. FHIR, body-part presets, PHI framework, dead-letter queue, and metrics; see §9 |
 | Date | 2026-08-24 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
@@ -334,14 +334,26 @@ Built and verified:
   stopped → 3 attempts at the configured backoff → dead-lettered with the
   full S3 error → MinIO restarted → one idempotent event re-POST converted
   the same study to ready.
+- **Monitoring/metrics** (2026-08-24): both services expose Prometheus
+  metrics on an internal port nginx never proxies; the dev stack scrapes
+  them with a Prometheus container. The four SLIs are implemented — queue
+  depth/pending gauges, conversion-p95 histogram, the **60 s SLO** as
+  enqueue-to-outcome time (from the Redis stream id's XADD timestamp, so it
+  includes queue wait and retries — the doctor-visible number), and
+  playback error rate (ok/unauthorized/not_found) — plus webhook outcomes
+  and per-route HTTP counts labeled by route template (no UID cardinality).
+  Verified E2E: real traffic produced correct counters/histograms on both
+  services, Prometheus reported both targets up and answered the quantile
+  and gauge queries. The PromQL for each SLI is documented in
+  `deploy/prometheus.yml`.
 
 Open (operational, mostly needing real data/infra):
 - PHI rule *content* for real NH machines (the framework, policy, and
   logging are built — see above): per-model mask/crop rectangles added to
   the mounted rules file as modalities are observed.
 - AADI's real IdP registered in the client registry; AADI player integration.
-- Monitoring (queue depth, conversion p95, playback error rate) and the 60 s
-  SLO measured on production hardware.
+- SLO *measurement* on production hardware (the metrics exist — see above):
+  real volumes, GPU throughput, alert thresholds, and dashboards.
 - Regression corpus from real-world DICOM failures.
 
 ### Phase 3 — Scale-out (not started)
