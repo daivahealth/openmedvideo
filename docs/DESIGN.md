@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| Status | v1.3 — Phases 1–2 engineering built and verified; integration contract (§5.3) fully implemented incl. FHIR; body-part CT presets shipped; see §9 |
-| Date | 2026-08-23 (v1.0: 2026-08-21) |
+| Status | v1.4 — Phases 1–2 engineering built and verified, incl. FHIR, body-part CT presets, and the PHI-strip framework; see §9 |
+| Date | 2026-08-24 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
 
@@ -228,7 +228,7 @@ s3://medvideo/
 
 ### 7.2 PHI handling (DPDP alignment)
 
-- Pixel-domain PHI (overlay planes, burned-in annotations) stripped at conversion where detectable; modalities known to burn in demographics get per-model crop rules.
+- Pixel-domain PHI stripped at conversion. Overlay planes (group 60xx) never reach the video — the rendering path draws pixel data only. PHI burned into the pixels is removed by **config-driven per-model crop/mask rules** (a mounted JSON file; matched case-insensitively on modality/Manufacturer/ManufacturerModelName, first match wins), compiled into the encoder's filter chain ahead of everything else. The poster is extracted from the *encoded* video so it inherits the stripping. `BurnedInAnnotation=YES` with no matching rule converts with a loud warning by default, or the series is refused under a strict policy setting. Adding a rule for a newly observed machine is a config edit, not a release.
 - Videos carry at most a coded study reference in-frame; patient identity is displayed by the app from the authorized catalog, never baked into shareable pixels.
 - The export-MP4 path requires an explicit user action in the client app, the `imaging.export` scope, and is logged (§7.3); it can be disabled per client or per deployment.
 
@@ -316,10 +316,20 @@ Built and verified:
   study produced brain/subdural/bone renditions with the US series
   untouched; unit tests cover the mappings, free-text variants, and
   fallbacks.
+- **PHI-strip framework** (2026-08-24): config-driven per-model crop/mask
+  rules (§7.2) applied ahead of encoding, `BurnedInAnnotation` policy
+  (warn-and-convert or refuse), applied filter logged per series, poster
+  moved onto the encoded (stripped) video — closing a leak where it came
+  straight from the renderer. Verified at the pixel level: with the default
+  US rule, the masked band measures exact video black (YAVG 16) while the
+  image below is untouched (55.6). What remains is *rule content*: the
+  per-machine rectangles for real NH modalities, which is ops configuration
+  as machines are observed, not engineering.
 
 Open (operational, mostly needing real data/infra):
-- PHI-strip rules per modality model and burned-in-annotation handling —
-  driven by what real NH modalities actually emit.
+- PHI rule *content* for real NH machines (the framework, policy, and
+  logging are built — see above): per-model mask/crop rectangles added to
+  the mounted rules file as modalities are observed.
 - AADI's real IdP registered in the client registry; AADI player integration.
 - Monitoring (queue depth, conversion p95, playback error rate) and the 60 s
   SLO measured on production hardware; dead-letter retry queue.
