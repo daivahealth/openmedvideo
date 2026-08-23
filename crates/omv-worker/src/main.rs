@@ -21,7 +21,7 @@ use redis::streams::{StreamReadOptions, StreamReadReply};
 use redis::AsyncCommands;
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tracing::{error, info, warn};
 
 struct Worker {
@@ -35,6 +35,10 @@ struct Worker {
     /// OMV_PHI_UNMATCHED_BURNEDIN=skip: refuse to convert a series whose
     /// BurnedInAnnotation tag says YES when no strip rule matches it.
     phi_skip_unmatched: bool,
+    /// Total conversion attempts before a job is dead-lettered.
+    max_attempts: u64,
+    /// How long a failed job stays pending before redelivery (the backoff).
+    retry_idle: std::time::Duration,
 }
 
 #[tokio::main]
@@ -57,6 +61,12 @@ async fn main() -> Result<()> {
         phi_rules: phi::load(std::env::var("OMV_PHI_RULES").ok().as_deref())?,
         phi_skip_unmatched: std::env::var("OMV_PHI_UNMATCHED_BURNEDIN").as_deref()
             == Ok("skip"),
+        max_attempts: std::env::var("OMV_MAX_ATTEMPTS")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(4),
+        retry_idle: std::time::Duration::from_secs(
+            std::env::var("OMV_RETRY_IDLE_SECS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(60),
+        ),
         cfg,
     };
 
@@ -81,6 +91,13 @@ async fn main() -> Result<()> {
     info!(consumer, "omv-worker ready");
 
     loop {
+        // Retry pass: reclaim jobs whose previous attempt failed (they stay
+        // pending un-acked) once they have been idle for the backoff period.
+        // The stream's delivery counter is the attempt counter.
+        if let Err(e) = worker.handle_retries(&mut conn, &consumer).await {
+            warn!(error = %e, "retry pass failed");
+        }
+
         let reply: StreamReadReply = match conn
             .xread_options(&[config::JOB_STREAM], &[">"], &read_opts)
             .await
@@ -95,45 +112,132 @@ async fn main() -> Result<()> {
 
         for key in reply.keys {
             for entry in key.ids {
-                let job: Option<ConversionJob> = entry
-                    .get::<String>("job")
-                    .and_then(|p| serde_json::from_str(&p).ok());
-                if let Some(job) = job {
-                    info!(study = %job.orthanc_study_id, "converting");
-                    if let Err(e) = worker.process_study(&job.orthanc_study_id).await {
-                        error!(study = %job.orthanc_study_id, error = ?e, "conversion failed");
-                        worker.mark_failed(&job.orthanc_study_id, &format!("{e:#}")).await;
-                    }
-                }
-                // Ack either way; failed studies stay visible in the catalog
-                // with status=failed. Dead-letter retry/backoff is Phase 2.
-                let _: redis::RedisResult<i64> = conn
-                    .xack(config::JOB_STREAM, config::JOB_GROUP, &[&entry.id])
-                    .await;
+                worker.handle_delivery(&mut conn, &entry, 1).await;
             }
         }
     }
 }
 
+/// Extracts the job payload from a stream entry.
+fn job_of(entry: &redis::streams::StreamId) -> Option<(String, ConversionJob)> {
+    let payload: String = entry.get("job")?;
+    let job = serde_json::from_str(&payload).ok()?;
+    Some((payload, job))
+}
+
 impl Worker {
-    async fn mark_failed(&self, orthanc_id: &str, err: &str) {
-        let row = sqlx::query(
-            "UPDATE studies SET status='failed', error=$2, updated_at=now()
-             WHERE orthanc_id=$1 RETURNING study_uid",
+    /// One delivery of a job (attempt N of max). Success acks; failure
+    /// leaves the message pending for the retry pass, or dead-letters it
+    /// when this was the final attempt.
+    async fn handle_delivery(
+        &self,
+        conn: &mut redis::aio::MultiplexedConnection,
+        entry: &redis::streams::StreamId,
+        attempt: u64,
+    ) {
+        let Some((payload, job)) = job_of(entry) else {
+            // Unparseable payload: nothing will ever succeed — dead-letter.
+            warn!(id = %entry.id, "unparseable job payload, dead-lettering");
+            self.dead_letter(conn, &entry.id, "?", "unparseable payload", attempt).await;
+            return;
+        };
+
+        info!(study = %job.orthanc_study_id, attempt, max = self.max_attempts, "converting");
+        match self.process_study(&job.orthanc_study_id).await {
+            Ok(()) => {
+                let _: redis::RedisResult<i64> =
+                    conn.xack(config::JOB_STREAM, config::JOB_GROUP, &[&entry.id]).await;
+            }
+            Err(e) if attempt >= self.max_attempts => {
+                error!(study = %job.orthanc_study_id, attempt, error = ?e,
+                       "conversion failed permanently, dead-lettering");
+                self.mark_status(&job.orthanc_study_id, "failed", &format!("{e:#}")).await;
+                self.dead_letter(conn, &entry.id, &payload, &format!("{e:#}"), attempt).await;
+                self.notifier
+                    .broadcast(&self.db, "study.failed", serde_json::json!({
+                        "orthanc_study_id": job.orthanc_study_id,
+                        "error": format!("{e:#}"),
+                        "attempts": attempt,
+                    }))
+                    .await;
+            }
+            Err(e) => {
+                warn!(study = %job.orthanc_study_id, attempt, error = ?e,
+                      "conversion failed, will retry after backoff");
+                self.mark_status(&job.orthanc_study_id, "retrying", &format!("{e:#}")).await;
+                // No ack: the message stays pending until the retry pass
+                // reclaims it after retry_idle.
+            }
+        }
+    }
+
+    /// Reclaims failed jobs that have been idle long enough and re-runs
+    /// them, with the stream's delivery counter as the attempt number.
+    async fn handle_retries(
+        &self,
+        conn: &mut redis::aio::MultiplexedConnection,
+        consumer: &str,
+    ) -> anyhow::Result<()> {
+        let reply: redis::streams::StreamAutoClaimReply = conn
+            .xautoclaim_options(
+                config::JOB_STREAM,
+                config::JOB_GROUP,
+                consumer,
+                self.retry_idle.as_millis() as usize,
+                "0-0",
+                redis::streams::StreamAutoClaimOptions::default().count(5),
+            )
+            .await?;
+
+        for entry in reply.claimed {
+            // Delivery count for this specific message.
+            let pending: redis::streams::StreamPendingCountReply = conn
+                .xpending_count(config::JOB_STREAM, config::JOB_GROUP, &entry.id, &entry.id, 1)
+                .await?;
+            let attempt = pending
+                .ids
+                .first()
+                .map(|p| p.times_delivered as u64)
+                .unwrap_or(self.max_attempts);
+            self.handle_delivery(conn, &entry, attempt).await;
+        }
+        Ok(())
+    }
+
+    /// Moves a job to the dead-letter stream with its final error, and acks
+    /// it off the work stream. Re-drive by re-POSTing the Orthanc event.
+    async fn dead_letter(
+        &self,
+        conn: &mut redis::aio::MultiplexedConnection,
+        entry_id: &str,
+        payload: &str,
+        error: &str,
+        attempts: u64,
+    ) {
+        let added: redis::RedisResult<String> = redis::cmd("XADD")
+            .arg(config::DEAD_STREAM).arg("*")
+            .arg("job").arg(payload)
+            .arg("error").arg(error)
+            .arg("attempts").arg(attempts)
+            .arg("at").arg(chrono::Utc::now().to_rfc3339())
+            .query_async(conn)
+            .await;
+        if let Err(e) = added {
+            error!(error = %e, "failed to write dead-letter entry");
+        }
+        let _: redis::RedisResult<i64> =
+            conn.xack(config::JOB_STREAM, config::JOB_GROUP, &[entry_id]).await;
+    }
+
+    async fn mark_status(&self, orthanc_id: &str, status: &str, err: &str) {
+        let _ = sqlx::query(
+            "UPDATE studies SET status=$2, error=$3, updated_at=now() WHERE orthanc_id=$1",
         )
         .bind(orthanc_id)
+        .bind(status)
         .bind(err)
-        .fetch_optional(&self.db)
+        .execute(&self.db)
         .await;
-        if let Ok(Some(r)) = row {
-            let study_uid: String = r.get("study_uid");
-            self.notifier
-                .broadcast(&self.db, "study.failed", serde_json::json!({
-                    "study_uid": study_uid,
-                    "error": err,
-                }))
-                .await;
-        }
     }
 
     async fn process_study(&self, orthanc_id: &str) -> Result<()> {

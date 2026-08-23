@@ -140,6 +140,17 @@ with DICOM modality codings and a contained `Endpoint` (connection type
 the token is short-lived, so integrations re-read the resource to refresh it.
 FHIR reads are audited like catalog views.
 
+**Retries and the dead-letter queue:** a failed conversion is not acked — the
+job stays pending and is reclaimed after `OMV_RETRY_IDLE_SECS` (default 60;
+the dev compose uses 15) with the Redis Stream's delivery counter as the
+attempt number, and the study shows `status: retrying` with the error. After
+`OMV_MAX_ATTEMPTS` (default 4) the job moves to the `omv:dead` stream with
+its final error attached, the study goes to `failed`, and the `study.failed`
+webhook fires — transient failures never spam clients. Inspect dead letters
+with `redis-cli XRANGE omv:dead - +`; re-drive one by re-POSTing the
+(idempotent) event: `curl -X POST .../internal/orthanc-event -d
+'{"study_id": "<orthanc id>"}'`.
+
 **Study-ready webhooks:** clients with a `webhook_url` registered receive
 `study.ready` / `study.failed` events as JSON POSTs, HMAC-signed with the
 client's `webhook_secret` (`X-OMV-Signature: sha256=<hex>` over the raw

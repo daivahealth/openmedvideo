@@ -87,6 +87,8 @@ services:
     environment:
       <<: *omv-env
       OMV_PHI_RULES: /etc/omv/phi-rules.json
+      OMV_MAX_ATTEMPTS: "3"
+      OMV_RETRY_IDLE_SECS: "15"   # dev: fast retries; production default is 60
     volumes:
       - ./phi-rules.json:/etc/omv/phi-rules.json:ro
     depends_on: [postgres, redis, minio-init, orthanc, api]

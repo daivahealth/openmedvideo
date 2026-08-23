@@ -66,3 +66,6 @@ impl Config {
 pub const JOB_STREAM: &str = "omv:jobs";
 /// Consumer group used by conversion workers.
 pub const JOB_GROUP: &str = "omv-workers";
+/// Dead-letter stream: jobs that exhausted their conversion attempts, with
+/// the final error attached. Re-drive by re-POSTing the Orthanc event.
+pub const DEAD_STREAM: &str = "omv:dead";

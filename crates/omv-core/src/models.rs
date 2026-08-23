@@ -13,7 +13,10 @@ pub struct ConversionJob {
 pub enum StudyStatus {
     Queued,
     Converting,
+    /// A conversion attempt failed; the job is pending redelivery.
+    Retrying,
     Ready,
+    /// All attempts exhausted; the job sits in the dead-letter stream.
     Failed,
 }
 
@@ -22,6 +25,7 @@ impl StudyStatus {
         match self {
             Self::Queued => "queued",
             Self::Converting => "converting",
+            Self::Retrying => "retrying",
             Self::Ready => "ready",
             Self::Failed => "failed",
         }
