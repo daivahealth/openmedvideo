@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v1.2 — Phases 1–2 engineering built and verified; integration contract (§5.3) fully implemented incl. FHIR; see §9 |
+| Status | v1.3 — Phases 1–2 engineering built and verified; integration contract (§5.3) fully implemented incl. FHIR; body-part CT presets shipped; see §9 |
 | Date | 2026-08-23 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
@@ -124,7 +124,7 @@ fetch series (Orthanc REST)
 
 | Modality | Frame rate | Renditions | Notes |
 |----------|-----------|------------|-------|
-| **CT** | 8–10 fps | One video per clinical window preset, selected by BodyPartExamined (chest → lung/mediastinal/bone; head → brain/subdural/bone; abdomen → soft-tissue/bone) | All-intra or 1 s GOP for scrubbing. Coronal/sagittal reformats are Phase 3. |
+| **CT** | 8–10 fps | One video per clinical window preset, selected by BodyPartExamined (chest → lung/mediastinal/bone; head → brain/subdural/bone; abdomen/pelvis → soft-tissue/bone; spine/neck → soft/bone; missing or unrecognized tag → general soft/lung/bone) | All-intra or 1 s GOP for scrubbing. Matching is contains-based over the uppercased tag — consoles emit both DICOM defined terms and free-ish text. Coronal/sagittal reformats are Phase 3. |
 | **MRI** | 8–10 fps | One video per series (T1/T2/FLAIR/DWI are already separate series) | Auto window from pixel-value percentiles (2nd–98th). |
 | **US** | Native cine rate from FrameTime / FrameTimeVector tags | One per cine loop | Near-lossless use case; preserve timing exactly. |
 | **XA / fluoro (angio)** | Native cine rate | One per run | Same as US; runs labelled by acquisition angle where available. |
@@ -310,11 +310,16 @@ Built and verified:
   catalog API. With this, **all five integration surfaces of §5.3 are
   implemented**: client registry + OAuth, versioned REST catalog, standard
   HLS playback + both player tiers, signed webhooks, and FHIR.
+- **Body-part-driven CT presets** (2026-08-23): window sets selected from
+  BodyPartExamined per the §4.2 table, general-set fallback on missing or
+  unrecognized tags, chosen set logged per series. Verified E2E: a HEAD
+  study produced brain/subdural/bone renditions with the US series
+  untouched; unit tests cover the mappings, free-text variants, and
+  fallbacks.
 
 Open (operational, mostly needing real data/infra):
 - PHI-strip rules per modality model and burned-in-annotation handling —
   driven by what real NH modalities actually emit.
-- Body-part-driven CT preset selection (BodyPartExamined).
 - AADI's real IdP registered in the client registry; AADI player integration.
 - Monitoring (queue depth, conversion p95, playback error rate) and the 60 s
   SLO measured on production hardware; dead-letter retry queue.
