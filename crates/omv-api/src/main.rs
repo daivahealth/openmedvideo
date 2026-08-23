@@ -24,6 +24,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 
 mod auth;
+mod fhir;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -69,6 +70,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/studies", get(list_studies))
         .route("/v1/studies/{study_uid}", get(get_study))
         .route("/v1/studies/{study_uid}/export", get(export_mp4))
+        .route("/fhir/metadata", get(fhir::metadata))
+        .route("/fhir/ImagingStudy", get(fhir::search))
+        .route("/fhir/ImagingStudy/{study_uid}", get(fhir::read))
         .route("/stream/{token}/{*key}", get(stream_object))
         .route("/player/{token}/{study_uid}", get(player_page))
         .route("/player-assets/hls.min.js", get(hls_js))
@@ -122,7 +126,10 @@ async fn orthanc_event(
 /// Primary path: an OMV access token from POST /oauth/token (token exchange
 /// or client_credentials). Deprecated dev fallback: the static bearer tokens
 /// from OMV_CLIENT_TOKENS, with the practitioner asserted in a header.
-fn authenticate(cfg: &Config, headers: &HeaderMap) -> Result<auth::Identity, ApiError> {
+pub(crate) fn authenticate(
+    cfg: &Config,
+    headers: &HeaderMap,
+) -> Result<auth::Identity, ApiError> {
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -373,7 +380,7 @@ async fn stream_object(
 
 // ----------------------------------------------------------------- errors --
 
-enum ApiError {
+pub(crate) enum ApiError {
     Unauthorized,
     NotFound,
     Internal(anyhow::Error),

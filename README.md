@@ -118,6 +118,15 @@ exceeds the WhatsApp-safe ~14 MB), downloadable via each rendition's
 (denials too), and can be disabled deployment-wide with
 `OMV_EXPORT_ENABLED=0`.
 
+**FHIR R4 exposure:** studies are also discoverable in healthcare-standard
+vocabulary (same OAuth bearer, `imaging.read` scope): `GET /fhir/metadata`
+(CapabilityStatement), `GET /fhir/ImagingStudy` (searchset Bundle of ready
+studies), and `GET /fhir/ImagingStudy/{StudyInstanceUID}` — the full resource
+with DICOM modality codings and a contained `Endpoint` (connection type
+`hls`) whose `address` is a tokenized URL to the study's `manifest.json`;
+the token is short-lived, so integrations re-read the resource to refresh it.
+FHIR reads are audited like catalog views.
+
 **Study-ready webhooks:** clients with a `webhook_url` registered receive
 `study.ready` / `study.failed` events as JSON POSTs, HMAC-signed with the
 client's `webhook_secret` (`X-OMV-Signature: sha256=<hex>` over the raw
