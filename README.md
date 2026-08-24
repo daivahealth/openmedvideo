@@ -144,6 +144,12 @@ exceeds the WhatsApp-safe ~14 MB), downloadable via each rendition's
 (denials too), and can be disabled deployment-wide with
 `OMV_EXPORT_ENABLED=0`.
 
+**Coronal/sagittal reformats:** CT stacks with trustworthy geometry
+(geometric sort succeeded, ≥20 slices, no PHI mask) also get "Coronal" and
+"Sagittal" renditions, resliced from the first window preset's frames with
+the slice axis stretched to true aspect (SliceThickness / PixelSpacing),
+superior at the top. They appear as extra preset tabs in the player.
+
 **PHI stripping:** DICOM overlay planes never reach the video (Orthanc's
 renderer draws pixel data only). PHI *burned into the pixels* — ultrasound
 demographic banners, console annotations — is removed by per-model crop/mask

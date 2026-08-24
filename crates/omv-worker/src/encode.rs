@@ -101,6 +101,42 @@ impl HlsEncoder {
     /// `all_intra` is used for CT/MRI stacks (design D6): every frame is a
     /// keyframe so players can frame-step and seek instantly. Cine content
     /// uses a ~1s GOP instead.
+    /// Starts ffmpeg consuming raw 8-bit grayscale frames of a fixed size
+    /// (used by the multiplanar reformats), scaling the output to
+    /// `out_w`×`out_h` (e.g. to stretch the slice axis to true aspect).
+    pub fn start_raw(
+        out_dir: &Path,
+        fps: f64,
+        encoder: Encoder,
+        in_size: (usize, usize),
+        out_size: (usize, usize),
+    ) -> Result<Self> {
+        let seg = out_dir.join("seg_%05d.m4s");
+        let playlist = out_dir.join("index.m3u8");
+        // Reformats are stacks: all-intra for frame stepping (design D6).
+        let vf = format!("scale={}:{}", out_size.0 & !1, out_size.1 & !1);
+        let mut child = Command::new("ffmpeg")
+            .args(["-y", "-hide_banner", "-loglevel", "error"])
+            .args(["-f", "rawvideo", "-pixel_format", "gray"])
+            .args(["-video_size", &format!("{}x{}", in_size.0, in_size.1)])
+            .args(["-framerate", &fps.to_string(), "-i", "pipe:0"])
+            .arg("-an")
+            .args(encoder.quality_args(18))
+            .args(["-pix_fmt", "yuv420p"])
+            .args(["-vf", &vf])
+            .args(["-g", "1", "-keyint_min", "1", "-sc_threshold", "0"])
+            .args(["-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod"])
+            .args(["-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4"])
+            .args(["-hls_segment_filename", seg.to_str().context("segment path")?])
+            .arg(playlist.to_str().context("playlist path")?)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .context("spawning ffmpeg — is it installed and on PATH?")?;
+        let stdin = child.stdin.take();
+        Ok(Self { child, stdin })
+    }
+
     pub fn start(
         out_dir: &Path,
         fps: f64,

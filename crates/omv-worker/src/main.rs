@@ -9,6 +9,7 @@ mod metrics;
 mod notify;
 mod orthanc;
 mod phi;
+mod reformat;
 mod sorting;
 
 use anyhow::{Context, Result};
@@ -409,9 +410,8 @@ impl Worker {
             return Ok(None);
         }
 
-        // (instance id, frame index) in playback order. Phase 1 sorts by
-        // InstanceNumber; geometric sort by ImagePositionPatient is Phase 2.
-        let frames = self.frame_list(&series).await?;
+        // (instance id, frame index) in playback order.
+        let (frames, sort_method) = self.frame_list(&series).await?;
         if frames.is_empty() {
             return Ok(None);
         }
@@ -461,6 +461,19 @@ impl Worker {
             (None, false) => {}
         }
 
+        // Multiplanar reformats need trustworthy geometry and clean pixels:
+        // geometric ordering succeeded, a real stack, and no PHI mask (a
+        // masked band would streak through every reformatted frame).
+        let reformat_eligible = modality == "CT"
+            && sort_method == "geometric"
+            && frames.len() >= 20
+            && phi_filter.is_none();
+        let mut volume = if reformat_eligible {
+            Some(reformat::Volume::new())
+        } else {
+            None
+        };
+
         let presets = models::presets_for(&modality, Some(body_part));
         info!(
             series = %series_uid, %modality, body_part,
@@ -469,7 +482,7 @@ impl Worker {
         );
 
         let mut renditions = Vec::new();
-        for preset in presets {
+        for (preset_idx, preset) in presets.iter().enumerate() {
             let dir = tempfile::tempdir().context("tempdir")?;
             let mut enc = encode::HlsEncoder::start(
                 dir.path(), fps, !cine, self.encoder, phi_filter.as_deref(),
@@ -479,6 +492,16 @@ impl Worker {
                     .orthanc
                     .rendered_frame(instance_id, *frame, preset.center_width)
                     .await?;
+                // Collect the first preset's slices into a volume for the
+                // coronal/sagittal reformats.
+                if preset_idx == 0 {
+                    if let Some(vol) = volume.as_mut() {
+                        if let Err(e) = vol.push_png(&png) {
+                            warn!(error = %e, "reformat volume abandoned");
+                            volume = None;
+                        }
+                    }
+                }
                 enc.write_frame(&png).await?;
             }
             enc.finish().await?;
@@ -510,14 +533,103 @@ impl Worker {
                 fps,
             });
         }
+
+        if let Some(vol) = volume.filter(|v| v.n_slices() >= 20) {
+            match self
+                .encode_reformats(study_uid, &series_uid, &series_description,
+                                  &modality, &vol, &inst_tags, &presets[0])
+                .await
+            {
+                Ok(mut r) => renditions.append(&mut r),
+                // Reformats are a bonus view; never sink the series on them.
+                Err(e) => warn!(series = %series_uid, error = ?e, "reformats skipped"),
+            }
+        }
+
         Ok(Some((modality, renditions)))
+    }
+
+    /// Encodes coronal and sagittal renditions from the stacked volume,
+    /// stretching the slice axis to true aspect via the DICOM spacings.
+    #[allow(clippy::too_many_arguments)]
+    async fn encode_reformats(
+        &self,
+        study_uid: &str,
+        series_uid: &str,
+        series_description: &str,
+        modality: &str,
+        vol: &reformat::Volume,
+        inst_tags: &Value,
+        first_preset: &models::WindowPreset,
+    ) -> Result<Vec<Rendition>> {
+        let tag_f64 = |name: &str| -> Option<f64> {
+            inst_tags[name]
+                .as_str()
+                .and_then(|s| s.split('\\').next())
+                .and_then(|s| s.trim().parse::<f64>().ok())
+        };
+        let pixel_spacing = tag_f64("PixelSpacing").unwrap_or(1.0);
+        let slice_gap = tag_f64("SpacingBetweenSlices")
+            .or_else(|| tag_f64("SliceThickness"))
+            .unwrap_or(pixel_spacing);
+        let z_scale = (slice_gap / pixel_spacing).clamp(0.2, 10.0);
+        let z_out = ((vol.n_slices() as f64) * z_scale).round() as usize;
+        let fps = models::stack_fps(modality);
+
+        let mut out = Vec::new();
+        for plane in ["coronal", "sagittal"] {
+            let (in_w, n_frames) = match plane {
+                "coronal" => (vol.width, vol.height),
+                _ => (vol.height, vol.width),
+            };
+            let dir = tempfile::tempdir().context("tempdir")?;
+            let mut enc = encode::HlsEncoder::start_raw(
+                dir.path(), fps, self.encoder,
+                (in_w, vol.n_slices()), (in_w, z_out),
+            )?;
+            match plane {
+                "coronal" => {
+                    for frame in vol.coronal() {
+                        enc.write_frame(&frame).await?;
+                    }
+                }
+                _ => {
+                    for frame in vol.sagittal() {
+                        enc.write_frame(&frame).await?;
+                    }
+                }
+            }
+            enc.finish().await?;
+            encode::mux_export(dir.path(), self.encoder).await?;
+
+            let key = format!("{}-{}", first_preset.key, &plane[..3]);
+            let prefix = format!("studies/{study_uid}/{series_uid}/{key}");
+            self.upload_dir(dir.path(), &prefix).await?;
+            info!(series = %series_uid, plane, frames = n_frames, z_out, "reformat encoded");
+
+            out.push(Rendition {
+                series_uid: series_uid.to_string(),
+                series_description: series_description.to_string(),
+                modality: modality.to_string(),
+                preset: key.clone(),
+                preset_label: format!(
+                    "{} ({})",
+                    if plane == "coronal" { "Coronal" } else { "Sagittal" },
+                    first_preset.label
+                ),
+                playlist: format!("{series_uid}/{key}/index.m3u8"),
+                frames: n_frames as i32,
+                fps,
+            });
+        }
+        Ok(out)
     }
 
     /// Builds the ordered (instance, frame) list for a series: multi-frame
     /// cine instances expand to their frames; single-frame stacks are ordered
     /// geometrically by ImagePositionPatient projected onto the series
     /// normal, with InstanceNumber as the fallback (design §4.1).
-    async fn frame_list(&self, series: &Value) -> Result<Vec<(String, u32)>> {
+    async fn frame_list(&self, series: &Value) -> Result<(Vec<(String, u32)>, &'static str)> {
         let ids: Vec<String> = series["Instances"]
             .as_array()
             .context("no Instances")?
@@ -573,7 +685,7 @@ impl Worker {
                 frames.push((s.id.clone(), f));
             }
         }
-        Ok(frames)
+        Ok((frames, method))
     }
 
     /// Native cine rate from the DICOM tags, per design §4.2.
