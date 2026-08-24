@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v1.8 — Phases 1–2 engineering built and verified; all three player tiers shipped (page, Web Component, React/Angular packages); see §9 |
+| Status | v1.9 — Phases 1–2 engineering built and verified; all player tiers shipped (page, Web Component, React/Angular/Flutter packages); see §9 |
 | Date | 2026-08-24 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
@@ -189,7 +189,11 @@ The platform is multi-tenant and app-agnostic. Integrating a new doctor/nurse ap
    **Player distribution strategy — one core, thin wrappers, no parallel renderers.** Video decoding is already native everywhere, so we never ship a renderer; what we ship is the clinical UI (slice scrub bar, frame stepping, preset switcher), built exactly once:
    - *Tier 1 (default):* the embeddable player via iframe/WebView — zero integration code, works in every framework, UI fixes ship centrally.
    - *Tier 2 (on demand):* the same player packaged as a framework-agnostic **Web Component** (`<omv-player study-id token>`), with typed Angular/React npm packages as thin wrappers around the one codebase (shipped: `@openmedvideo/player-react` and `@openmedvideo/player-angular` in `packages/`).
-   - *Tier 3 (only if proven demand):* a native Flutter package wrapping `video_player` plus the slice UI.
+   - *Tier 3:* a Flutter package. Shipped as `omv_player_flutter`
+     (`packages/player_flutter`): a widget embedding the tier-1 page in a
+     WebView with events bridged to Dart over a JS channel and an imperative
+     controller — one UI codebase preserved. The fully *native*
+     `video_player`-based variant remains only-if-proven-demand.
 
    All tiers consume the same per-study `manifest.json` (renditions, presets, slice counts) — the manifest is the contract; every player is just a view over it.
 5. **Signed webhooks + FHIR-aligned resources.** `study.ready`, `study.failed`, and `study.expired` events are POSTed to each client's registered endpoint, HMAC-signed. For EMR/HIS-grade integrations, studies are additionally exposed as **FHIR R4 `ImagingStudy` resources with an `Endpoint`** pointing at the HLS manifest — so healthcare systems can discover video renditions using standard vocabulary rather than a proprietary API.
@@ -293,8 +297,14 @@ Built and verified:
   Angular wrapper packages** (2026-08-24, `packages/`) complete the tier:
   ~100 lines each over the same component, compiled strict against React 19
   / Angular 19; the React wrapper runtime-verified cross-origin (events as
-  props, ref-forwarded frame stepping). Only the native Flutter package
-  stays deferred, gated on proven demand.
+  props, ref-forwarded frame stepping). The **Flutter package**
+  (`omv_player_flutter`, 2026-08-24) completes tier 3 as a WebView embed of
+  the tier-1 page with an `OmvChannel` JS-channel event bridge and an
+  imperative controller — analyzer-clean with unit tests, and the bridge
+  wire format proven in-browser against the exact channel/JS the Dart side
+  uses; an on-device smoke test is still owed before clinical use. Only the
+  fully native `video_player` variant stays deferred, gated on proven
+  demand.
 - **Geometric slice ordering**: ImagePositionPatient projected onto the
   series normal, InstanceNumber fallback on missing/degenerate geometry;
   verified at the pixel level against a scrambled-InstanceNumber study.
