@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v1.9 — Phases 1–2 engineering built and verified; all player tiers shipped (page, Web Component, React/Angular/Flutter packages); see §9 |
+| Status | v2.0 — all engineering across Phases 1–3 that needs no external dependency is built and E2E-verified; open items are data/infra-bound only; see §9 |
 | Date | 2026-08-24 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
@@ -126,7 +126,7 @@ fetch series (Orthanc REST)
 
 | Modality | Frame rate | Renditions | Notes |
 |----------|-----------|------------|-------|
-| **CT** | 8–10 fps | One video per clinical window preset, selected by BodyPartExamined (chest → lung/mediastinal/bone; head → brain/subdural/bone; abdomen/pelvis → soft-tissue/bone; spine/neck → soft/bone; missing or unrecognized tag → general soft/lung/bone) | All-intra or 1 s GOP for scrubbing. Matching is contains-based over the uppercased tag — consoles emit both DICOM defined terms and free-ish text. Coronal/sagittal reformats are Phase 3. |
+| **CT** | 8–10 fps | One video per clinical window preset, selected by BodyPartExamined (chest → lung/mediastinal/bone; head → brain/subdural/bone; abdomen/pelvis → soft-tissue/bone; spine/neck → soft/bone; missing or unrecognized tag → general soft/lung/bone) | All-intra or 1 s GOP for scrubbing. Matching is contains-based over the uppercased tag — consoles emit both DICOM defined terms and free-ish text. Coronal/sagittal reformats ship as extra renditions when geometry is trustworthy (see §9). |
 | **MRI** | 8–10 fps | One video per series (T1/T2/FLAIR/DWI are already separate series) | Auto window from pixel-value percentiles (2nd–98th). |
 | **US** | Native cine rate from FrameTime / FrameTimeVector tags | One per cine loop | Near-lossless use case; preserve timing exactly. |
 | **XA / fluoro (angio)** | Native cine rate | One per run | Same as US; runs labelled by acquisition angle where available. |
@@ -371,6 +371,17 @@ Built and verified:
   normalizes histogram `le` labels to float form (`le="60.0"`), so SLO
   queries must match that, not the exporter's `le="60"`.
 
+- **Coronal/sagittal CT reformats** (2026-08-24, pulled forward from
+  Phase 3): the first preset's axial slices are stacked into a volume and
+  resliced (one frame per row/column, superior at the top), encoded
+  all-intra with the slice axis stretched to true aspect from the DICOM
+  spacings; surfaced as ordinary renditions, so every player tier gained
+  Coronal/Sagittal tabs with no UI changes. Guardrails: CT only, ≥20
+  slices, geometric sort succeeded, no PHI mask; reformat failure never
+  sinks the series. Verified by unit tests with provenance-coded voxels,
+  ffprobe (256×100 = 40 slices × 2.5 mm stretch), and the player rendering
+  the phantom's coronal anatomy correctly.
+
 Open (operational, mostly needing real data/infra):
 - PHI rule *content* for real NH machines (the framework, policy, and
   logging are built — see above): per-model mask/crop rectangles added to
@@ -383,7 +394,7 @@ Open (operational, mostly needing real data/infra):
 
 ### Phase 3 — Scale-out (not started)
 
-Multi-hospital ingest, second and third client apps onboarded via the registry (nurse app, web portal), regional edge caches/CDN, coronal/sagittal reformats for CT, storage lifecycle + regenerate-on-demand, capacity planning from measured volumes. (FHIR `ImagingStudy`/`Endpoint` exposure was originally scoped here; it was pulled forward and shipped with Phase 2 — see above.)
+Multi-hospital ingest, second and third client apps onboarded via the registry (nurse app, web portal), regional edge caches/CDN, storage lifecycle + regenerate-on-demand, capacity planning from measured volumes. (FHIR exposure and the coronal/sagittal reformats were originally scoped here; both were pulled forward and shipped — see above.)
 
 ### Open questions (needed to size Phase 2)
 
