@@ -102,8 +102,15 @@ wrappers live in `packages/` (same one codebase underneath — the packages are
   component; consumers never need `CUSTOM_ELEMENTS_SCHEMA`, and events
   re-enter Angular's zone for change detection.
 
-Both are installable via `file:`/git today; npm publishing is a release-time
-decision.
+- **Flutter**: `omv_player_flutter` — an `OmvPlayer` widget embedding the
+  player page in a WebView, with `onReady`/`onError`/`onFrame` callbacks and
+  an `OmvPlayerController` for `step`/`gotoFrame`; the page forwards events
+  over a `OmvChannel` JS channel. Depend via git + `path:
+  packages/player_flutter`.
+
+All are installable via `file:`/git today (Dart supports git dependencies
+with a `path`, so no separate repo is needed); npm/pub.dev publishing is a
+release-time decision.
 
 ## Phase 1 design shortcuts (deliberate)
 

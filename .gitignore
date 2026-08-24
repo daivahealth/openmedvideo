@@ -6,3 +6,5 @@ node_modules/
 packages/*/dist/
 examples/react-demo/bundle.js
 examples/react-demo/package-lock.json
+.dart_tool/
+packages/player_flutter/pubspec.lock

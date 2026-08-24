@@ -1,0 +1,21 @@
+name: omv_player_flutter
+description: >-
+  Flutter wrapper for the OpenMedVideo clinical imaging player: embeds the
+  server's player page in a WebView and bridges its events/controls to Dart.
+version: 0.1.0
+repository: https://github.com/daivahealth/openmedvideo
+homepage: https://github.com/daivahealth/openmedvideo/tree/main/packages/player_flutter
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.16.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  webview_flutter: ^4.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
