@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | v1.7 — Phases 1–2 engineering built and verified, incl. FHIR, body-part presets, PHI framework, dead-letter queue, metrics, and dashboards; see §9 |
+| Status | v1.8 — Phases 1–2 engineering built and verified; all three player tiers shipped (page, Web Component, React/Angular packages); see §9 |
 | Date | 2026-08-24 (v1.0: 2026-08-21) |
 | Author | Sajith Chandran (sajith.chandran@narayanahealth.org) |
 | Audience | Engineering, client app teams (AADI first), clinical stakeholders |
@@ -188,7 +188,7 @@ The platform is multi-tenant and app-agnostic. Integrating a new doctor/nurse ap
 
    **Player distribution strategy — one core, thin wrappers, no parallel renderers.** Video decoding is already native everywhere, so we never ship a renderer; what we ship is the clinical UI (slice scrub bar, frame stepping, preset switcher), built exactly once:
    - *Tier 1 (default):* the embeddable player via iframe/WebView — zero integration code, works in every framework, UI fixes ship centrally.
-   - *Tier 2 (on demand):* the same player packaged as a framework-agnostic **Web Component** (`<omv-player study-id token>`); published Angular/React npm packages are then ~50-line wrappers around the one codebase.
+   - *Tier 2 (on demand):* the same player packaged as a framework-agnostic **Web Component** (`<omv-player study-id token>`), with typed Angular/React npm packages as thin wrappers around the one codebase (shipped: `@openmedvideo/player-react` and `@openmedvideo/player-angular` in `packages/`).
    - *Tier 3 (only if proven demand):* a native Flutter package wrapping `video_player` plus the slice UI.
 
    All tiers consume the same per-study `manifest.json` (renditions, presets, slice counts) — the manifest is the contract; every player is just a view over it.
@@ -285,11 +285,16 @@ Built and verified:
   app is a row, not a release), RFC 8693 token exchange + client_credentials,
   JWKS validation for RS256 IdPs, scope enforcement at issuance and use,
   practitioner identity flowing into the audit trail.
-- **Players**: embeddable web player (tier 1, one tokenized URL) and the
-  `<omv-player>` Web Component (tier 2) sharing one codebase — slice scrub
-  bar, ±1 frame stepping, preset/series tabs, events and theming hooks for
-  host apps; hls.js vendored into the binary (offline hospital networks),
-  CORS for cross-origin embeds.
+- **Players — all three tiers**: embeddable web player (tier 1, one
+  tokenized URL) and the `<omv-player>` Web Component (tier 2) sharing one
+  codebase — slice scrub bar, ±1 frame stepping, preset/series tabs, events
+  and theming hooks for host apps; hls.js vendored into the binary (offline
+  hospital networks), CORS for cross-origin embeds. Typed **React and
+  Angular wrapper packages** (2026-08-24, `packages/`) complete the tier:
+  ~100 lines each over the same component, compiled strict against React 19
+  / Angular 19; the React wrapper runtime-verified cross-origin (events as
+  props, ref-forwarded frame stepping). Only the native Flutter package
+  stays deferred, gated on proven demand.
 - **Geometric slice ordering**: ImagePositionPatient projected onto the
   series normal, InstanceNumber fallback on missing/degenerate geometry;
   verified at the pixel level against a scrambled-InstanceNumber study.
