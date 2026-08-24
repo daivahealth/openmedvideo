@@ -8,3 +8,5 @@ examples/react-demo/bundle.js
 examples/react-demo/package-lock.json
 .dart_tool/
 packages/player_flutter/pubspec.lock
+packages/player_flutter/build/
+packages/player_flutter/.flutter-plugins-dependencies
